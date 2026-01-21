@@ -15,6 +15,7 @@ import Html.Events exposing (..)
 import Json.Decode as D
 import Json.Encode as E
 import LogParser exposing (ParseError(..), parseLogFile)
+import MessageList
 import Ports
 import Types exposing (..)
 
@@ -532,63 +533,12 @@ viewSidebar model =
                     text ""
                 ]
             ]
-        , viewMessageList model
+        , MessageList.view
+            { selectedIndex = model.selectedIndex
+            , onSelect = SelectMessage
+            , entries = model.logEntries
+            }
         ]
-
-
-{-| Render the list of messages in the sidebar.
--}
-viewMessageList : Model -> Html Msg
-viewMessageList model =
-    if List.isEmpty model.logEntries then
-        div [ class "flex-1 flex items-center justify-center p-4" ]
-            [ div [ class "text-center text-base-content/60" ]
-                [ p [ class "text-sm" ] [ text "No messages loaded" ]
-                , p [ class "text-xs mt-2" ] [ text "Open a TeaForge log file to begin" ]
-                ]
-            ]
-
-    else
-        ul [ class "menu p-2 flex-1 overflow-y-auto" ]
-            (List.indexedMap (viewMessageItem model.selectedIndex) model.logEntries)
-
-
-{-| Render a single message item in the list.
--}
-viewMessageItem : Maybe Int -> Int -> LogEntry -> Html Msg
-viewMessageItem selectedIndex index entry =
-    let
-        isSelected =
-            selectedIndex == Just index
-
-        itemClass =
-            if isSelected then
-                "menu-item-active"
-
-            else
-                ""
-    in
-    li []
-        [ a
-            [ class ("flex flex-col items-start " ++ itemClass)
-            , onClick (SelectMessage index)
-            ]
-            [ span [ class "font-medium" ] [ text entry.message.name ]
-            , span [ class "text-xs text-base-content/60" ]
-                [ text (formatTimestamp entry.timestamp) ]
-            ]
-        ]
-
-
-{-| Format a Unix timestamp for display.
-
-TODO: Implement proper timestamp formatting in a utility module.
-
--}
-formatTimestamp : Int -> String
-formatTimestamp timestamp =
-    -- Simple placeholder formatting
-    String.fromInt timestamp
 
 
 {-| Render the main content area.

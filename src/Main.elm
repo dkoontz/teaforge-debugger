@@ -786,38 +786,102 @@ viewSelectedState model =
 
 {-| Render the effects footer section.
 
-TODO: Implement actual effects display in phase-8.
+Displays the list of effects (commands) produced by the selected message's
+update function. Effects are shown in a collapsible panel with their names
+and associated data.
 
 -}
 viewEffectsFooter : Model -> Html Msg
 viewEffectsFooter model =
+    let
+        selectedEffects =
+            case model.selectedIndex of
+                Just index ->
+                    model.logEntries
+                        |> List.drop index
+                        |> List.head
+                        |> Maybe.map .effects
+                        |> Maybe.withDefault []
+
+                Nothing ->
+                    []
+
+        effectCount =
+            List.length selectedEffects
+    in
     div [ class "border-t border-base-300 bg-base-200" ]
         [ div [ class "collapse collapse-arrow" ]
             [ input [ type_ "checkbox", class "peer" ] []
             , div [ class "collapse-title font-medium" ]
                 [ text "Effects"
-                , case model.selectedIndex of
-                    Just index ->
-                        let
-                            effectCount =
-                                model.logEntries
-                                    |> List.drop index
-                                    |> List.head
-                                    |> Maybe.map (.effects >> List.length)
-                                    |> Maybe.withDefault 0
-                        in
-                        span [ class "badge badge-sm ml-2" ]
-                            [ text (String.fromInt effectCount) ]
+                , if effectCount > 0 then
+                    span [ class "badge badge-primary badge-sm ml-2" ]
+                        [ text (String.fromInt effectCount) ]
 
-                    Nothing ->
-                        text ""
+                  else
+                    span [ class "badge badge-ghost badge-sm ml-2" ]
+                        [ text "0" ]
                 ]
             , div [ class "collapse-content" ]
-                [ p [ class "text-sm text-base-content/60" ]
-                    [ text "Effects display will be implemented in phase-8" ]
-                ]
+                [ viewEffectsList selectedEffects ]
             ]
         ]
+
+
+{-| Render the list of effects or an empty state message.
+-}
+viewEffectsList : List Effect -> Html Msg
+viewEffectsList effects =
+    if List.isEmpty effects then
+        p [ class "text-sm text-base-content/60 py-2" ]
+            [ text "No effects for this message" ]
+
+    else
+        ul [ class "space-y-2 pt-2" ]
+            (List.indexedMap viewEffectItem effects)
+
+
+{-| Render a single effect item with its name and data.
+-}
+viewEffectItem : Int -> Effect -> Html Msg
+viewEffectItem index effect =
+    li [ class "bg-base-100 rounded-lg border border-base-300 overflow-hidden" ]
+        [ div [ class "flex items-center gap-2 px-3 py-2 bg-base-200/50 border-b border-base-300" ]
+            [ span [ class "badge badge-outline badge-sm" ]
+                [ text (String.fromInt (index + 1)) ]
+            , span [ class "font-mono font-medium text-sm" ]
+                [ text effect.name ]
+            ]
+        , div [ class "p-3" ]
+            [ viewEffectData effect.data ]
+        ]
+
+
+{-| Render effect data as formatted JSON.
+
+Converts the Json.Decode.Value to a pretty-printed JSON string.
+Truncates very long values to keep the UI manageable.
+
+-}
+viewEffectData : E.Value -> Html Msg
+viewEffectData data =
+    let
+        jsonString =
+            E.encode 2 data
+
+        -- Truncate very long strings for readability
+        maxLength =
+            500
+
+        displayString =
+            if String.length jsonString > maxLength then
+                String.left maxLength jsonString ++ "\n... (truncated)"
+
+            else
+                jsonString
+    in
+    pre [ class "text-xs font-mono bg-base-100 p-2 rounded overflow-x-auto whitespace-pre-wrap" ]
+        [ text displayString ]
 
 
 

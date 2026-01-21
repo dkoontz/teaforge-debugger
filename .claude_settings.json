@@ -1,0 +1,39 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(/Users/david/dev/teaforge-debugger/.auto-claude/worktrees/tasks/001-this-is-a-greenfield-application-that-is-a-utility/**)",
+      "Write(/Users/david/dev/teaforge-debugger/.auto-claude/worktrees/tasks/001-this-is-a-greenfield-application-that-is-a-utility/**)",
+      "Edit(/Users/david/dev/teaforge-debugger/.auto-claude/worktrees/tasks/001-this-is-a-greenfield-application-that-is-a-utility/**)",
+      "Glob(/Users/david/dev/teaforge-debugger/.auto-claude/worktrees/tasks/001-this-is-a-greenfield-application-that-is-a-utility/**)",
+      "Grep(/Users/david/dev/teaforge-debugger/.auto-claude/worktrees/tasks/001-this-is-a-greenfield-application-that-is-a-utility/**)",
+      "Read(/Users/david/dev/teaforge-debugger/.auto-claude/worktrees/tasks/001-this-is-a-greenfield-application-that-is-a-utility/.auto-claude/specs/001-this-is-a-greenfield-application-that-is-a-utility/**)",
+      "Write(/Users/david/dev/teaforge-debugger/.auto-claude/worktrees/tasks/001-this-is-a-greenfield-application-that-is-a-utility/.auto-claude/specs/001-this-is-a-greenfield-application-that-is-a-utility/**)",
+      "Edit(/Users/david/dev/teaforge-debugger/.auto-claude/worktrees/tasks/001-this-is-a-greenfield-application-that-is-a-utility/.auto-claude/specs/001-this-is-a-greenfield-application-that-is-a-utility/**)",
+      "Read(/Users/david/dev/teaforge-debugger/.auto-claude/**)",
+      "Write(/Users/david/dev/teaforge-debugger/.auto-claude/**)",
+      "Edit(/Users/david/dev/teaforge-debugger/.auto-claude/**)",
+      "Glob(/Users/david/dev/teaforge-debugger/.auto-claude/**)",
+      "Grep(/Users/david/dev/teaforge-debugger/.auto-claude/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}

@@ -80,6 +80,27 @@
   .message-item-selected {
     @apply bg-primary/10 text-primary;
   }
+
+  /* Split.js resize handle styling */
+  .gutter {
+    @apply bg-base-300 transition-colors duration-150;
+  }
+
+  .gutter:hover {
+    @apply bg-primary/40;
+  }
+
+  .gutter:active {
+    @apply bg-primary/60;
+  }
+
+  .gutter.gutter-horizontal {
+    @apply cursor-col-resize;
+  }
+
+  .gutter.gutter-vertical {
+    @apply cursor-row-resize;
+  }
 }
 
 /* Custom utility styles */

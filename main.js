@@ -75,8 +75,21 @@ ipcMain.handle('open-file-dialog', async () => {
     }
 });
 
+// Handle --test-launch flag for verification
+const isTestLaunch = process.argv.includes('--test-launch');
+
 app.whenReady().then(() => {
     createWindow();
+
+    // If running in test mode, quit after window is ready
+    if (isTestLaunch) {
+        mainWindow.webContents.on('did-finish-load', () => {
+            // Small delay to ensure Elm app initializes
+            setTimeout(() => {
+                app.quit();
+            }, 1000);
+        });
+    }
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {

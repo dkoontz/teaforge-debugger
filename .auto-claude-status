@@ -3,23 +3,23 @@
   "spec": "001-this-is-a-greenfield-application-that-is-a-utility",
   "state": "building",
   "subtasks": {
-    "completed": 17,
+    "completed": 18,
     "total": 35,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Effects Footer",
+    "current": "State View Modes",
     "id": null,
-    "total": 1
+    "total": 4
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 18,
+    "number": 19,
     "started_at": "2026-01-21T15:27:58.844852"
   },
-  "last_update": "2026-01-21T16:00:09.878988"
+  "last_update": "2026-01-21T16:01:50.962968"
 }

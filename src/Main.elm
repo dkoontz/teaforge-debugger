@@ -17,6 +17,7 @@ import Json.Encode as E
 import LogParser exposing (ParseError(..), parseLogFile)
 import MessageList
 import Ports
+import TreeView
 import Types exposing (..)
 
 
@@ -70,6 +71,7 @@ type alias Model =
     , loadingState : LoadingState
     , errorMessage : Maybe String
     , skippedEntries : Int
+    , treeViewState : TreeView.State
     }
 
 
@@ -91,6 +93,7 @@ init _ =
       , loadingState = Idle
       , errorMessage = Nothing
       , skippedEntries = 0
+      , treeViewState = TreeView.init
       }
     , Cmd.none
     )
@@ -125,6 +128,8 @@ type Msg
     | NextMatch
     | PreviousMatch
     | ToggleFilter
+      -- Tree View
+    | TreeViewMsg TreeView.Msg
       -- Port Communication
     | GotPortMessage E.Value
       -- Error Handling
@@ -187,6 +192,22 @@ update msg model =
                                     )
 
                                 else
+                                    let
+                                        -- Parse the first entry's modelAfter for tree view
+                                        initialTreeState =
+                                            entries
+                                                |> List.head
+                                                |> Maybe.map
+                                                    (\entry ->
+                                                        case TreeView.parseValue entry.modelAfter TreeView.init of
+                                                            Ok state ->
+                                                                state
+
+                                                            Err _ ->
+                                                                TreeView.init
+                                                    )
+                                                |> Maybe.withDefault TreeView.init
+                                    in
                                     ( { model
                                         | loadingState = Loaded
                                         , logEntries = entries
@@ -203,6 +224,7 @@ update msg model =
 
                                             else
                                                 Nothing
+                                        , treeViewState = initialTreeState
                                       }
                                     , Cmd.none
                                     )
@@ -231,7 +253,28 @@ update msg model =
 
         -- Navigation
         SelectMessage index ->
-            ( { model | selectedIndex = Just index }
+            let
+                -- Get the selected log entry's modelAfter and parse it for tree view
+                newTreeState =
+                    model.logEntries
+                        |> List.drop index
+                        |> List.head
+                        |> Maybe.map
+                            (\entry ->
+                                case TreeView.parseValue entry.modelAfter model.treeViewState of
+                                    Ok state ->
+                                        state
+
+                                    Err _ ->
+                                        -- If parsing fails, keep the default state
+                                        TreeView.init
+                            )
+                        |> Maybe.withDefault TreeView.init
+            in
+            ( { model
+                | selectedIndex = Just index
+                , treeViewState = newTreeState
+              }
             , Cmd.none
             )
 
@@ -279,6 +322,12 @@ update msg model =
 
         ToggleFilter ->
             ( { model | filterActive = not model.filterActive }
+            , Cmd.none
+            )
+
+        -- Tree View
+        TreeViewMsg treeMsg ->
+            ( { model | treeViewState = TreeView.update treeMsg model.treeViewState }
             , Cmd.none
             )
 
@@ -698,16 +747,20 @@ viewNoSelection =
 
 {-| Render the state view for the selected message.
 
-TODO: Implement actual tree view in phase-7.
+Displays the model state using TreeView component for PostState mode,
+with placeholder views for SplitView and DiffView (phase-9).
 
 -}
 viewSelectedState : Model -> Html Msg
 viewSelectedState model =
     case model.viewMode of
         PostState ->
-            div [ class "bg-base-100 rounded-lg border border-base-300 p-4" ]
-                [ p [ class "text-base-content/60" ]
-                    [ text "State tree view will be implemented in phase-7" ]
+            div [ class "bg-base-100 rounded-lg border border-base-300 p-4 h-full overflow-auto" ]
+                [ TreeView.view
+                    { onSelect = Nothing
+                    , toMsg = TreeViewMsg
+                    }
+                    model.treeViewState
                 ]
 
         SplitView ->

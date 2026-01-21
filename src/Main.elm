@@ -676,40 +676,35 @@ parseErrorToString error =
 
 {-| Main view function rendering the application layout.
 
-Uses DaisyUI components for styling:
+Uses a flex-based layout with Split.js for resizable panels:
 
-  - Drawer for sidebar layout
+  - Sidebar (split-sidebar) for message list
+  - Main content area (split-main) with header, state view, and effects footer
+  - Split.js handles the resizable divider between panels
+
+DaisyUI components are used for:
+
   - Menu for message list
   - Tabs for view mode switching
 
 -}
 view : Model -> Html Msg
 view model =
-    div [ class "drawer drawer-open h-full" ]
-        [ -- Drawer toggle (hidden, drawer is always open on desktop)
-          input
-            [ id "sidebar-drawer"
-            , type_ "checkbox"
-            , class "drawer-toggle"
-            , checked True
+    div [ class "flex h-full w-full" ]
+        [ -- Sidebar panel (Split.js will manage sizing)
+          div
+            [ id "split-sidebar"
+            , class "flex flex-col h-full overflow-hidden bg-base-200"
             ]
-            []
+            [ viewSidebar model ]
 
-        -- Main content area
-        , div [ class "drawer-content flex flex-col" ]
+        -- Main content panel (Split.js will manage sizing)
+        , div
+            [ id "split-main"
+            , class "flex flex-col h-full overflow-hidden"
+            ]
             [ viewHeader model
             , viewMainContent model
-            ]
-
-        -- Sidebar
-        , div [ class "drawer-side h-full" ]
-            [ label
-                [ for "sidebar-drawer"
-                , attribute "aria-label" "close sidebar"
-                , class "drawer-overlay"
-                ]
-                []
-            , viewSidebar model
             ]
         ]
 
@@ -753,14 +748,15 @@ viewLoadingIndicator loadingState =
 
 
 {-| Render the sidebar with message list.
+
+The sidebar is now a flex child of the split panel layout. Split.js manages the width,
+so we no longer need to set a hardcoded width style.
+
 -}
 viewSidebar : Model -> Html Msg
 viewSidebar model =
-    aside
-        [ class "bg-base-200 w-80 min-h-full flex flex-col"
-        , style "width" (String.fromInt model.sidebarWidth ++ "px")
-        ]
-        [ div [ class "p-4 border-b border-base-300" ]
+    div [ class "flex flex-col h-full overflow-hidden" ]
+        [ div [ class "p-4 border-b border-base-300 shrink-0" ]
             [ h2 [ class "font-semibold text-lg" ] [ text "Messages" ]
             , div [ class "flex items-center gap-2" ]
                 [ span [ class "text-sm text-base-content/60" ]
@@ -778,11 +774,13 @@ viewSidebar model =
                     text ""
                 ]
             ]
-        , MessageList.view
-            { selectedIndex = model.selectedIndex
-            , onSelect = SelectMessage
-            , entries = model.logEntries
-            }
+        , div [ class "flex-1 overflow-y-auto" ]
+            [ MessageList.view
+                { selectedIndex = model.selectedIndex
+                , onSelect = SelectMessage
+                , entries = model.logEntries
+                }
+            ]
         ]
 
 

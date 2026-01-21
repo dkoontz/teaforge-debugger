@@ -14,6 +14,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Json.Decode as D
 import Json.Encode as E
+import LogParser exposing (ParseError(..), parseLogFile)
 import Ports
 import Types exposing (..)
 
@@ -67,6 +68,7 @@ type alias Model =
     , sidebarWidth : Int
     , loadingState : LoadingState
     , errorMessage : Maybe String
+    , skippedEntries : Int
     }
 
 
@@ -87,6 +89,7 @@ init _ =
       , sidebarWidth = 320
       , loadingState = Idle
       , errorMessage = Nothing
+      , skippedEntries = 0
       }
     , Cmd.none
     )
@@ -169,15 +172,49 @@ update msg model =
         FileReadResult result ->
             if result.success then
                 case result.content of
-                    Just _ ->
-                        -- TODO: Parse log file contents in phase-5
-                        ( { model
-                            | loadingState = Loaded
-                            , logEntries = []
-                            , selectedIndex = Nothing
-                          }
-                        , Cmd.none
-                        )
+                    Just content ->
+                        case parseLogFile content of
+                            Ok ( entries, skippedCount ) ->
+                                if List.isEmpty entries && skippedCount == 0 then
+                                    ( { model
+                                        | loadingState = Error "No log entries found in file"
+                                        , logEntries = []
+                                        , selectedIndex = Nothing
+                                        , skippedEntries = 0
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                else
+                                    ( { model
+                                        | loadingState = Loaded
+                                        , logEntries = entries
+                                        , selectedIndex =
+                                            if List.isEmpty entries then
+                                                Nothing
+
+                                            else
+                                                Just 0
+                                        , skippedEntries = skippedCount
+                                        , errorMessage =
+                                            if skippedCount > 0 then
+                                                Just (String.fromInt skippedCount ++ " malformed entries were skipped")
+
+                                            else
+                                                Nothing
+                                      }
+                                    , Cmd.none
+                                    )
+
+                            Err parseError ->
+                                ( { model
+                                    | loadingState = Error (parseErrorToString parseError)
+                                    , logEntries = []
+                                    , selectedIndex = Nothing
+                                    , skippedEntries = 0
+                                  }
+                                , Cmd.none
+                                )
 
                     Nothing ->
                         ( { model | loadingState = Error "File was empty" }
@@ -372,6 +409,21 @@ handleErrorResult value model =
             )
 
 
+{-| Convert a ParseError to a user-friendly string message.
+-}
+parseErrorToString : ParseError -> String
+parseErrorToString error =
+    case error of
+        InvalidJson jsonError ->
+            "Invalid JSON format: " ++ jsonError
+
+        UnexpectedFormat message ->
+            "Unexpected file format: " ++ message
+
+        EmptyFile ->
+            "The file is empty"
+
+
 
 -- VIEW
 
@@ -464,8 +516,21 @@ viewSidebar model =
         ]
         [ div [ class "p-4 border-b border-base-300" ]
             [ h2 [ class "font-semibold text-lg" ] [ text "Messages" ]
-            , span [ class "text-sm text-base-content/60" ]
-                [ text (String.fromInt (List.length model.logEntries) ++ " messages") ]
+            , div [ class "flex items-center gap-2" ]
+                [ span [ class "text-sm text-base-content/60" ]
+                    [ text (String.fromInt (List.length model.logEntries) ++ " messages") ]
+                , if model.skippedEntries > 0 then
+                    div
+                        [ class "tooltip tooltip-right"
+                        , attribute "data-tip" (String.fromInt model.skippedEntries ++ " malformed entries skipped")
+                        ]
+                        [ span [ class "badge badge-warning badge-sm" ]
+                            [ text (String.fromInt model.skippedEntries ++ " skipped") ]
+                        ]
+
+                  else
+                    text ""
+                ]
             ]
         , viewMessageList model
         ]

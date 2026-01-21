@@ -9,6 +9,8 @@ communication with JavaScript via ports.
 -}
 
 import Browser
+import Browser.Dom as Dom
+import Browser.Events
 import Dict exposing (Dict)
 import Diff
 import Html exposing (..)
@@ -21,6 +23,7 @@ import MessageList
 import Ports
 import Search
 import Set exposing (Set)
+import Task
 import TreeView
 import Types exposing (..)
 
@@ -146,6 +149,8 @@ type Msg
     | NextMatch
     | PreviousMatch
     | ToggleFilter
+    | FocusSearch
+    | NoOp
       -- Tree View (After state)
     | TreeViewMsg TreeView.Msg
       -- Tree View (Before state - for split view)
@@ -467,6 +472,14 @@ update msg model =
             ( { model | filterActive = not model.filterActive }
             , Cmd.none
             )
+
+        FocusSearch ->
+            ( model
+            , Task.attempt (\_ -> NoOp) (Dom.focus "search-input")
+            )
+
+        NoOp ->
+            ( model, Cmd.none )
 
         -- Tree View (After state)
         TreeViewMsg treeMsg ->
@@ -836,6 +849,13 @@ viewModeTab currentMode targetMode label =
 
 
 {-| Render the search box with navigation controls.
+
+Keyboard shortcuts supported:
+
+  - Enter: Navigate to next match
+  - Shift+Enter: Navigate to previous match
+  - Cmd/Ctrl+F: Focus search (handled globally in subscriptions)
+
 -}
 viewSearchBox : Model -> Html Msg
 viewSearchBox model =
@@ -843,10 +863,12 @@ viewSearchBox model =
         [ div [ class "form-control" ]
             [ input
                 [ type_ "text"
-                , placeholder "Search..."
+                , id "search-input"
+                , placeholder "Search... (⌘F)"
                 , class "input input-bordered input-sm w-48"
                 , value model.searchQuery
                 , onInput SetSearchQuery
+                , preventDefaultOn "keydown" searchKeyDecoder
                 ]
                 []
             ]
@@ -862,6 +884,34 @@ viewSearchBox model =
                 []
             ]
         ]
+
+
+{-| Decoder for keyboard events in the search input.
+
+Handles:
+
+  - Enter: Navigate to next match
+  - Shift+Enter: Navigate to previous match
+
+Returns (Msg, Bool) where Bool indicates whether to prevent default behavior.
+
+-}
+searchKeyDecoder : D.Decoder ( Msg, Bool )
+searchKeyDecoder =
+    D.map2
+        (\key shiftKey ->
+            if key == "Enter" then
+                if shiftKey then
+                    ( PreviousMatch, True )
+
+                else
+                    ( NextMatch, True )
+
+            else
+                ( NoOp, False )
+        )
+        (D.field "key" D.string)
+        (D.field "shiftKey" D.bool)
 
 
 {-| Render search navigation buttons and match counter.
@@ -1294,9 +1344,45 @@ viewEffectData data =
 
 {-| Application subscriptions.
 
-Subscribes to the incoming port for JavaScript messages.
+Subscribes to:
+
+  - Incoming port for JavaScript messages
+  - Global keyboard events for shortcuts (Cmd/Ctrl+F for search focus)
+
+Note: We use preventDefaultOn to prevent browser's default Cmd/Ctrl+F behavior.
 
 -}
 subscriptions : Model -> Sub Msg
 subscriptions _ =
-    Ports.incoming GotPortMessage
+    Sub.batch
+        [ Ports.incoming GotPortMessage
+        , Browser.Events.preventDefaultOn "keydown" keyboardShortcutDecoder
+        ]
+
+
+{-| Decoder for global keyboard shortcuts.
+
+Handles:
+
+  - Cmd/Ctrl+F: Focus the search input (prevents default browser find)
+
+Returns (Msg, Bool) where Bool indicates whether to prevent default behavior.
+
+-}
+keyboardShortcutDecoder : D.Decoder ( Msg, Bool )
+keyboardShortcutDecoder =
+    D.map4
+        (\key metaKey ctrlKey tagName ->
+            -- Cmd/Ctrl+F: Focus search input
+            if key == "f" && (metaKey || ctrlKey) then
+                -- Always prevent default for Cmd/Ctrl+F to avoid browser find dialog
+                -- Focus search even if already in an input (user might be in a different input)
+                ( FocusSearch, True )
+
+            else
+                ( NoOp, False )
+        )
+        (D.field "key" D.string)
+        (D.field "metaKey" D.bool)
+        (D.field "ctrlKey" D.bool)
+        (D.at [ "target", "tagName" ] D.string)

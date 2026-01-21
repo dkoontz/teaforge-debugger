@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
+    <title>TeaForge Debugger</title>
+    <link rel="stylesheet" href="dist/styles.css">
+</head>
+<body class="h-screen overflow-hidden bg-base-100">
+    <!-- Elm application mount point -->
+    <div id="elm-app" class="h-full"></div>
+
+    <!-- Load compiled Elm application -->
+    <script src="dist/elm.js"></script>
+
+    <!-- Initialize Elm app and wire up ports -->
+    <script>
+        // Initialize the Elm application
+        const app = Elm.Main.init({
+            node: document.getElementById('elm-app'),
+            flags: null
+        });
+
+        // Wire up Elm outgoing port to Electron APIs
+        // The Elm app sends commands via the outgoing port, and we handle them here
+        if (app.ports && app.ports.outgoing) {
+            app.ports.outgoing.subscribe(async function(message) {
+                const { type, payload } = message;
+
+                try {
+                    switch (type) {
+                        case 'openFileDialog':
+                            const dialogResult = await window.electron.openFileDialog();
+                            sendToElm({
+                                type: 'fileDialogResult',
+                                payload: dialogResult
+                            });
+                            break;
+
+                        case 'readFile':
+                            const readResult = await window.electron.readFile(payload.path);
+                            sendToElm({
+                                type: 'fileReadResult',
+                                payload: {
+                                    path: payload.path,
+                                    ...readResult
+                                }
+                            });
+                            break;
+
+                        case 'listFiles':
+                            const listResult = await window.electron.listFiles(payload.path);
+                            sendToElm({
+                                type: 'fileListResult',
+                                payload: {
+                                    path: payload.path,
+                                    ...listResult
+                                }
+                            });
+                            break;
+
+                        default:
+                            console.warn('Unknown port message type:', type);
+                    }
+                } catch (error) {
+                    console.error('Error handling port message:', error);
+                    sendToElm({
+                        type: 'error',
+                        payload: {
+                            originalType: type,
+                            error: error.message
+                        }
+                    });
+                }
+            });
+        }
+
+        // Helper function to send messages to Elm via the incoming port
+        function sendToElm(message) {
+            if (app.ports && app.ports.incoming) {
+                app.ports.incoming.send(message);
+            }
+        }
+    </script>
+</body>
+</html>

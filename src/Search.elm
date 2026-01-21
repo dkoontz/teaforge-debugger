@@ -4,6 +4,7 @@ module Search exposing
     , searchInValue
     , matchesQuery
     , pathToString
+    , buildVisiblePaths
     )
 
 {-| Search functionality for the TeaForge Debugger.
@@ -265,6 +266,37 @@ Joins path segments with dots for display purposes.
 pathToString : TreePath -> String
 pathToString path =
     String.join "." path
+
+
+{-| Build a set of all path prefixes that should be visible in filtered mode.
+
+For each matching path, includes the path itself and all its ancestors.
+For example, if ["user", "profile", "name"] matches, this returns:
+["", "user", "user.profile", "user.profile.name"]
+
+This ensures that when filtering the tree view, parent nodes are shown
+so that the matching nodes remain accessible.
+
+-}
+buildVisiblePaths : List TreePath -> Set String
+buildVisiblePaths matchingPaths =
+    List.foldl
+        (\path acc ->
+            -- Add all prefixes of this path
+            List.foldl
+                (\idx innerAcc ->
+                    let
+                        prefix =
+                            List.take (idx + 1) path
+                                |> String.join "."
+                    in
+                    Set.insert prefix innerAcc
+                )
+                (Set.insert "" acc)
+                (List.range 0 (List.length path - 1))
+        )
+        Set.empty
+        matchingPaths
 
 
 

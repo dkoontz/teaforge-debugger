@@ -2,11 +2,13 @@ module TreeView exposing
     ( State
     , Config
     , DiffConfig
+    , FilterConfig
     , Change(..)
     , Msg
     , init
     , update
     , view
+    , viewFiltered
     , viewDiff
     , viewEmpty
     , parseValue
@@ -84,6 +86,20 @@ type alias DiffConfig msg =
     { changedPaths : List (List String)
     , changes : Dict String Change
     , changesOnly : Bool
+    , onToggleExpand : List String -> msg
+    }
+
+
+{-| Configuration for rendering the filtered tree view.
+
+  - `visiblePaths`: Set of path strings that should be visible
+  - `matchingPaths`: Set of paths that directly match the search (for highlighting)
+  - `onToggleExpand`: Callback when a node is expanded/collapsed
+
+-}
+type alias FilterConfig msg =
+    { visiblePaths : Set String
+    , matchingPaths : Set String
     , onToggleExpand : List String -> msg
     }
 
@@ -210,6 +226,318 @@ viewEmpty =
             [ p [ class "text-sm" ] [ text "No state data" ]
             , p [ class "text-xs mt-2" ] [ text "Select a message to view its state" ]
             ]
+        ]
+
+
+
+-- FILTERED VIEW (for search filter mode)
+
+
+{-| Render the tree view with search filtering.
+
+When filter mode is active, this shows only paths that match the search query
+(and their parent paths to maintain tree structure). Matching nodes are
+highlighted with a special style.
+
+-}
+viewFiltered : FilterConfig msg -> D.Value -> Set String -> Html msg
+viewFiltered config jsonValue expandedPaths =
+    if Set.isEmpty config.visiblePaths then
+        -- No matches, show empty state
+        div [ class "tree-view font-mono text-sm" ]
+            [ div [ class "flex items-center justify-center h-32 text-base-content/60" ]
+                [ div [ class "text-center" ]
+                    [ p [ class "text-sm" ] [ text "No matches found" ]
+                    , p [ class "text-xs mt-1" ] [ text "Try a different search term" ]
+                    ]
+                ]
+            ]
+
+    else
+        div [ class "tree-view font-mono text-sm" ]
+            [ viewFilteredNode config expandedPaths [] jsonValue
+            ]
+
+
+{-| Render a single node in the filtered tree.
+-}
+viewFilteredNode : FilterConfig msg -> Set String -> List String -> D.Value -> Html msg
+viewFilteredNode config expandedPaths currentPath jsonValue =
+    let
+        pathKey =
+            String.join "." currentPath
+
+        -- Should this node be visible?
+        isVisible =
+            Set.member pathKey config.visiblePaths || pathKey == ""
+
+        -- Is this node a direct match (for highlighting)?
+        isMatch =
+            Set.member pathKey config.matchingPaths
+
+        -- Highlight class for matching nodes
+        highlightClass =
+            if isMatch then
+                " search-match"
+
+            else
+                ""
+    in
+    if not isVisible then
+        text ""
+
+    else
+        case getValueType jsonValue of
+            ObjectType ->
+                viewFilteredObject config expandedPaths currentPath jsonValue highlightClass
+
+            ArrayType ->
+                viewFilteredArray config expandedPaths currentPath jsonValue highlightClass
+
+            _ ->
+                viewFilteredPrimitive currentPath jsonValue highlightClass
+
+
+{-| Render an object node in the filtered tree with expand/collapse capability.
+-}
+viewFilteredObject : FilterConfig msg -> Set String -> List String -> D.Value -> String -> Html msg
+viewFilteredObject config expandedPaths currentPath jsonValue highlightClass =
+    let
+        pathKey =
+            String.join "." currentPath
+
+        isExpanded =
+            Set.member pathKey expandedPaths || pathKey == ""
+
+        keys =
+            getObjectKeys jsonValue
+
+        -- Filter keys to only show those that are visible
+        visibleKeys =
+            List.filter
+                (\key ->
+                    let
+                        childPath =
+                            currentPath ++ [ key ]
+
+                        childPathKey =
+                            String.join "." childPath
+                    in
+                    Set.member childPathKey config.visiblePaths
+                )
+                keys
+
+        keyCount =
+            List.length visibleKeys
+
+        label =
+            if List.isEmpty currentPath then
+                "root"
+
+            else
+                Maybe.withDefault "?" (List.head (List.reverse currentPath))
+    in
+    div [ class ("tree-node pl-2" ++ highlightClass) ]
+        [ div
+            [ class "flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5"
+            , onClick (config.onToggleExpand currentPath)
+            ]
+            [ span [ class "text-base-content/40 w-4" ]
+                [ text
+                    (if isExpanded then
+                        "▼"
+
+                     else
+                        "▶"
+                    )
+                ]
+            , span [ class "text-primary" ] [ text label ]
+            , span [ class "text-base-content/40" ]
+                [ text (" {" ++ String.fromInt keyCount ++ "}") ]
+            ]
+        , if isExpanded then
+            div [ class "ml-4 border-l border-base-300 pl-2" ]
+                (List.map
+                    (\key ->
+                        let
+                            childPath =
+                                currentPath ++ [ key ]
+
+                            childValue =
+                                getObjectField key jsonValue
+                                    |> Maybe.withDefault E.null
+                        in
+                        viewFilteredKeyValue config expandedPaths childPath key childValue
+                    )
+                    visibleKeys
+                )
+
+          else
+            text ""
+        ]
+
+
+{-| Render an array node in the filtered tree with expand/collapse capability.
+-}
+viewFilteredArray : FilterConfig msg -> Set String -> List String -> D.Value -> String -> Html msg
+viewFilteredArray config expandedPaths currentPath jsonValue highlightClass =
+    let
+        pathKey =
+            String.join "." currentPath
+
+        isExpanded =
+            Set.member pathKey expandedPaths || pathKey == ""
+
+        items =
+            getArrayItems jsonValue
+
+        -- Filter items to only show those that are visible
+        indexedItems =
+            List.indexedMap Tuple.pair items
+
+        visibleItems =
+            List.filter
+                (\( idx, _ ) ->
+                    let
+                        childPath =
+                            currentPath ++ [ String.fromInt idx ]
+
+                        childPathKey =
+                            String.join "." childPath
+                    in
+                    Set.member childPathKey config.visiblePaths
+                )
+                indexedItems
+
+        itemCount =
+            List.length visibleItems
+
+        label =
+            if List.isEmpty currentPath then
+                "root"
+
+            else
+                Maybe.withDefault "?" (List.head (List.reverse currentPath))
+    in
+    div [ class ("tree-node pl-2" ++ highlightClass) ]
+        [ div
+            [ class "flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5"
+            , onClick (config.onToggleExpand currentPath)
+            ]
+            [ span [ class "text-base-content/40 w-4" ]
+                [ text
+                    (if isExpanded then
+                        "▼"
+
+                     else
+                        "▶"
+                    )
+                ]
+            , span [ class "text-primary" ] [ text label ]
+            , span [ class "text-base-content/40" ]
+                [ text (" [" ++ String.fromInt itemCount ++ "]") ]
+            ]
+        , if isExpanded then
+            div [ class "ml-4 border-l border-base-300 pl-2" ]
+                (List.map
+                    (\( idx, item ) ->
+                        let
+                            childPath =
+                                currentPath ++ [ String.fromInt idx ]
+                        in
+                        viewFilteredIndexValue config expandedPaths childPath idx item
+                    )
+                    visibleItems
+                )
+
+          else
+            text ""
+        ]
+
+
+{-| Render a key-value pair in the filtered tree.
+-}
+viewFilteredKeyValue : FilterConfig msg -> Set String -> List String -> String -> D.Value -> Html msg
+viewFilteredKeyValue config expandedPaths currentPath key childValue =
+    let
+        pathKey =
+            String.join "." currentPath
+
+        isMatch =
+            Set.member pathKey config.matchingPaths
+
+        highlightClass =
+            if isMatch then
+                " search-match"
+
+            else
+                ""
+    in
+    case getValueType childValue of
+        ObjectType ->
+            viewFilteredObject config expandedPaths currentPath childValue highlightClass
+
+        ArrayType ->
+            viewFilteredArray config expandedPaths currentPath childValue highlightClass
+
+        _ ->
+            div [ class ("flex items-center gap-1 py-0.5 px-1 rounded" ++ highlightClass) ]
+                [ span [ class "text-secondary" ] [ text (key ++ ":") ]
+                , viewPrimitiveValue childValue
+                ]
+
+
+{-| Render an indexed value in the filtered array.
+-}
+viewFilteredIndexValue : FilterConfig msg -> Set String -> List String -> Int -> D.Value -> Html msg
+viewFilteredIndexValue config expandedPaths currentPath idx childValue =
+    let
+        pathKey =
+            String.join "." currentPath
+
+        isMatch =
+            Set.member pathKey config.matchingPaths
+
+        highlightClass =
+            if isMatch then
+                " search-match"
+
+            else
+                ""
+    in
+    case getValueType childValue of
+        ObjectType ->
+            viewFilteredObject config expandedPaths currentPath childValue highlightClass
+
+        ArrayType ->
+            viewFilteredArray config expandedPaths currentPath childValue highlightClass
+
+        _ ->
+            div [ class ("flex items-center gap-1 py-0.5 px-1 rounded" ++ highlightClass) ]
+                [ span [ class "text-base-content/40" ] [ text (String.fromInt idx ++ ":") ]
+                , viewPrimitiveValue childValue
+                ]
+
+
+{-| Render a primitive value in the filtered tree.
+-}
+viewFilteredPrimitive : List String -> D.Value -> String -> Html msg
+viewFilteredPrimitive currentPath jsonValue highlightClass =
+    let
+        label =
+            if List.isEmpty currentPath then
+                ""
+
+            else
+                Maybe.withDefault "" (List.head (List.reverse currentPath)) ++ ": "
+    in
+    div [ class ("flex items-center gap-1 py-0.5 px-1 rounded" ++ highlightClass) ]
+        [ if not (String.isEmpty label) then
+            span [ class "text-secondary" ] [ text label ]
+
+          else
+            text ""
+        , viewPrimitiveValue jsonValue
         ]
 
 

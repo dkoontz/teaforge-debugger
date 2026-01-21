@@ -71,8 +71,10 @@ type alias Model =
     , viewMode : ViewMode
     , searchQuery : String
     , searchMatches : List TreePath
+    , searchPathsWithMatches : Set String
     , currentMatchIndex : Int
     , filterActive : Bool
+    , filterExpandedPaths : Set String
     , sidebarWidth : Int
     , loadingState : LoadingState
     , errorMessage : Maybe String
@@ -97,8 +99,10 @@ init _ =
       , viewMode = PostState
       , searchQuery = ""
       , searchMatches = []
+      , searchPathsWithMatches = Set.empty
       , currentMatchIndex = 0
       , filterActive = False
+      , filterExpandedPaths = Set.singleton ""
       , sidebarWidth = 320
       , loadingState = Idle
       , errorMessage = Nothing
@@ -148,6 +152,8 @@ type Msg
     | BeforeTreeViewMsg TreeView.Msg
       -- Diff View
     | DiffToggleExpand (List String)
+      -- Filter View
+    | FilterToggleExpand (List String)
       -- Port Communication
     | GotPortMessage E.Value
       -- Error Handling
@@ -361,6 +367,7 @@ update msg model =
                 , changedPaths = newChangedPaths
                 , changes = newChanges
                 , searchMatches = searchResult.matches
+                , searchPathsWithMatches = searchResult.pathsWithMatches
                 , currentMatchIndex =
                     if List.isEmpty searchResult.matches then
                         0
@@ -369,6 +376,13 @@ update msg model =
                         -- Try to preserve the current match index, or reset to 0
                         min model.currentMatchIndex (List.length searchResult.matches - 1)
                             |> max 0
+                , filterExpandedPaths =
+                    -- Update filter expanded paths if searching
+                    if String.isEmpty model.searchQuery then
+                        model.filterExpandedPaths
+
+                    else
+                        Search.buildVisiblePaths searchResult.matches
               }
             , Cmd.none
             )
@@ -405,12 +419,20 @@ update msg model =
             ( { model
                 | searchQuery = query
                 , searchMatches = searchResult.matches
+                , searchPathsWithMatches = searchResult.pathsWithMatches
                 , currentMatchIndex =
                     if List.isEmpty searchResult.matches then
                         0
 
                     else
                         0
+                , filterExpandedPaths =
+                    -- Auto-expand paths with matches when filtering
+                    if String.isEmpty (String.trim query) then
+                        Set.singleton ""
+
+                    else
+                        Search.buildVisiblePaths searchResult.matches
               }
             , Cmd.none
             )
@@ -472,6 +494,23 @@ update msg model =
                         Set.insert pathKey model.diffExpandedPaths
             in
             ( { model | diffExpandedPaths = newExpandedPaths }
+            , Cmd.none
+            )
+
+        -- Filter View
+        FilterToggleExpand path ->
+            let
+                pathKey =
+                    String.join "." path
+
+                newExpandedPaths =
+                    if Set.member pathKey model.filterExpandedPaths then
+                        Set.remove pathKey model.filterExpandedPaths
+
+                    else
+                        Set.insert pathKey model.filterExpandedPaths
+            in
+            ( { model | filterExpandedPaths = newExpandedPaths }
             , Cmd.none
             )
 
@@ -905,19 +944,79 @@ viewSelectedState model =
     in
     case model.viewMode of
         PostState ->
-            div [ class "bg-base-100 rounded-lg border border-base-300 p-4 h-full overflow-auto" ]
-                [ TreeView.view
-                    { onSelect = Nothing
-                    , toMsg = TreeViewMsg
-                    }
-                    model.treeViewState
-                ]
+            viewPostStateMode model
 
         SplitView ->
             viewSplitMode model isFirstMessage
 
         DiffView opts ->
             viewDiffMode model opts
+
+
+{-| Render the post-state view mode.
+
+When filter is active and there's a search query, shows only matching paths.
+Otherwise shows the full tree view.
+
+-}
+viewPostStateMode : Model -> Html Msg
+viewPostStateMode model =
+    let
+        -- Get the selected entry's modelAfter for rendering
+        maybeAfterState =
+            model.selectedIndex
+                |> Maybe.andThen
+                    (\idx ->
+                        model.logEntries
+                            |> List.drop idx
+                            |> List.head
+                            |> Maybe.map .modelAfter
+                    )
+
+        -- Should we show filtered view?
+        showFiltered =
+            model.filterActive && not (String.isEmpty (String.trim model.searchQuery))
+    in
+    if showFiltered then
+        let
+            visiblePaths =
+                Search.buildVisiblePaths model.searchMatches
+
+            filterConfig =
+                { visiblePaths = visiblePaths
+                , matchingPaths = model.searchPathsWithMatches
+                , onToggleExpand = FilterToggleExpand
+                }
+        in
+        div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
+            [ -- Header indicating filtered mode
+              div [ class "flex items-center justify-between px-4 py-2 border-b border-base-300 bg-base-200/50" ]
+                [ div [ class "flex items-center gap-2" ]
+                    [ span [ class "text-sm font-medium" ] [ text "Filtered View" ]
+                    , span [ class "badge badge-info badge-sm" ]
+                        [ text (String.fromInt (List.length model.searchMatches) ++ " matches") ]
+                    ]
+                ]
+
+            -- Content area
+            , div [ class "flex-1 overflow-auto p-4" ]
+                [ case maybeAfterState of
+                    Just afterJson ->
+                        TreeView.viewFiltered filterConfig afterJson model.filterExpandedPaths
+
+                    Nothing ->
+                        TreeView.viewEmpty
+                ]
+            ]
+
+    else
+        div [ class "bg-base-100 rounded-lg border border-base-300 p-4 h-full overflow-auto" ]
+            [ TreeView.view
+                { onSelect = Nothing
+                , toMsg = TreeViewMsg
+                }
+                model.treeViewState
+            ]
 
 
 {-| Render the split view mode with before and after states side by side.

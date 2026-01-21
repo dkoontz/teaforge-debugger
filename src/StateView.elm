@@ -16,10 +16,12 @@ the tab bar, search controls, and dispatches to the correct view implementation.
 
 -}
 
+import Dict exposing (Dict)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Json.Decode as D
+import Set exposing (Set)
 import TreeView
 import Types exposing (..)
 
@@ -43,6 +45,9 @@ import Types exposing (..)
   - `filterActive`: Whether filter mode is active
   - `onToggleFilter`: Callback to toggle filter mode
   - `changedPaths`: List of paths that changed (for diff view)
+  - `changes`: Dictionary mapping path strings to change types (for diff highlighting)
+  - `diffExpandedPaths`: Set of expanded path keys in diff view
+  - `onDiffToggleExpand`: Callback when expanding/collapsing a node in diff view
   - `hasSelection`: Whether a message is currently selected
   - `isFirstMessage`: Whether this is the first message (no before state)
 
@@ -65,6 +70,9 @@ type alias Config msg =
     , filterActive : Bool
     , onToggleFilter : msg
     , changedPaths : List TreePath
+    , changes : Dict String TreeView.Change
+    , diffExpandedPaths : Set String
+    , onDiffToggleExpand : List String -> msg
     , hasSelection : Bool
     , isFirstMessage : Bool
     }
@@ -402,18 +410,23 @@ viewInitialStateMessage =
 This view displays the after state with changed values visually distinguished.
 When `changesOnly` is true, only the changed paths are shown.
 
-Note: Full diff highlighting will be implemented in subtask-9-4.
-Currently shows a placeholder with the tree view.
-
 -}
 viewDiffView : Config msg -> { changesOnly : Bool } -> Html msg
 viewDiffView config opts =
     let
         changeCount =
             List.length config.changedPaths
+
+        diffConfig =
+            { changedPaths = config.changedPaths
+            , changes = config.changes
+            , changesOnly = opts.changesOnly
+            , onToggleExpand = config.onDiffToggleExpand
+            }
     in
-    div [ class "bg-base-100 rounded-lg border border-base-300 p-4 h-full overflow-auto" ]
-        [ div [ class "flex items-center justify-between mb-3 pb-2 border-b border-base-300" ]
+    div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
+        [ -- Header with change count
+          div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
             [ h3 [ class "font-semibold text-base" ] [ text "Diff View" ]
             , div [ class "flex items-center gap-2" ]
                 [ if changeCount > 0 then
@@ -431,23 +444,39 @@ viewDiffView config opts =
                     text ""
                 ]
             ]
-        , if opts.changesOnly && changeCount == 0 then
-            div [ class "flex items-center justify-center h-32" ]
-                [ div [ class "text-center text-base-content/60" ]
-                    [ p [ class "text-sm" ] [ text "No changes detected" ]
-                    , p [ class "text-xs mt-1" ] [ text "The state is identical before and after this message" ]
+
+        -- Content area
+        , div [ class "flex-1 overflow-auto p-4" ]
+            [ if opts.changesOnly && changeCount == 0 then
+                div [ class "flex items-center justify-center h-32" ]
+                    [ div [ class "text-center text-base-content/60" ]
+                        [ p [ class "text-sm" ] [ text "No changes detected" ]
+                        , p [ class "text-xs mt-1" ] [ text "The state is identical before and after this message" ]
+                        ]
                     ]
-                ]
 
-          else
-            div []
-                [ -- Placeholder message for diff highlighting (will be fully implemented in subtask-9-4)
-                  if changeCount > 0 then
-                    div [ class "alert alert-info mb-3" ]
-                        [ text "Diff highlighting will be fully implemented in subtask-9-4" ]
+              else
+                case config.afterState of
+                    Just afterJson ->
+                        TreeView.viewDiff diffConfig afterJson config.diffExpandedPaths
 
-                  else
-                    text ""
-                , TreeView.view config.treeViewConfig config.treeViewState
+                    Nothing ->
+                        TreeView.viewEmpty
+            ]
+
+        -- Legend
+        , div [ class "flex items-center gap-4 px-4 py-2 border-t border-base-300 bg-base-200/30 text-xs" ]
+            [ span [ class "flex items-center gap-1" ]
+                [ span [ class "w-3 h-3 bg-warning/20 border-l-2 border-warning" ] []
+                , text "Modified"
                 ]
+            , span [ class "flex items-center gap-1" ]
+                [ span [ class "w-3 h-3 bg-success/20 border-l-2 border-success" ] []
+                , text "Added"
+                ]
+            , span [ class "flex items-center gap-1" ]
+                [ span [ class "w-3 h-3 bg-error/20 border-l-2 border-error" ] []
+                , text "Removed"
+                ]
+            ]
         ]

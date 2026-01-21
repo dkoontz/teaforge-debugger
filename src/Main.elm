@@ -9,6 +9,8 @@ communication with JavaScript via ports.
 -}
 
 import Browser
+import Dict exposing (Dict)
+import Diff
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
@@ -17,6 +19,7 @@ import Json.Encode as E
 import LogParser exposing (ParseError(..), parseLogFile)
 import MessageList
 import Ports
+import Set exposing (Set)
 import TreeView
 import Types exposing (..)
 
@@ -58,6 +61,7 @@ This structure follows the design from the spec, managing:
   - Search and filter state
   - UI state (sidebar width, loading state)
   - Tree view states for after and before states (split view)
+  - Diff view state (expanded paths, computed changes)
 
 -}
 type alias Model =
@@ -74,6 +78,9 @@ type alias Model =
     , skippedEntries : Int
     , treeViewState : TreeView.State
     , beforeTreeViewState : TreeView.State
+    , diffExpandedPaths : Set String
+    , changedPaths : List TreePath
+    , changes : Dict String Diff.Change
     }
 
 
@@ -97,6 +104,9 @@ init _ =
       , skippedEntries = 0
       , treeViewState = TreeView.init
       , beforeTreeViewState = TreeView.init
+      , diffExpandedPaths = Set.singleton ""
+      , changedPaths = []
+      , changes = Dict.empty
       }
     , Cmd.none
     )
@@ -135,6 +145,8 @@ type Msg
     | TreeViewMsg TreeView.Msg
       -- Tree View (Before state - for split view)
     | BeforeTreeViewMsg TreeView.Msg
+      -- Diff View
+    | DiffToggleExpand (List String)
       -- Port Communication
     | GotPortMessage E.Value
       -- Error Handling
@@ -309,11 +321,31 @@ update msg model =
                                         TreeView.init
                             )
                         |> Maybe.withDefault TreeView.init
+
+                -- Compute diff for the diff view
+                diffResult =
+                    maybeEntry
+                        |> Maybe.map
+                            (\entry ->
+                                Diff.findChangedPaths entry.modelBefore entry.modelAfter
+                            )
+
+                newChangedPaths =
+                    diffResult
+                        |> Maybe.map .changedPaths
+                        |> Maybe.withDefault []
+
+                newChanges =
+                    diffResult
+                        |> Maybe.map .changes
+                        |> Maybe.withDefault Dict.empty
             in
             ( { model
                 | selectedIndex = Just index
                 , treeViewState = newTreeState
                 , beforeTreeViewState = newBeforeTreeState
+                , changedPaths = newChangedPaths
+                , changes = newChanges
               }
             , Cmd.none
             )
@@ -374,6 +406,23 @@ update msg model =
         -- Tree View (Before state - for split view)
         BeforeTreeViewMsg treeMsg ->
             ( { model | beforeTreeViewState = TreeView.update treeMsg model.beforeTreeViewState }
+            , Cmd.none
+            )
+
+        -- Diff View
+        DiffToggleExpand path ->
+            let
+                pathKey =
+                    String.join "." path
+
+                newExpandedPaths =
+                    if Set.member pathKey model.diffExpandedPaths then
+                        Set.remove pathKey model.diffExpandedPaths
+
+                    else
+                        Set.insert pathKey model.diffExpandedPaths
+            in
+            ( { model | diffExpandedPaths = newExpandedPaths }
             , Cmd.none
             )
 
@@ -795,7 +844,7 @@ viewNoSelection =
 
 Displays the model state using TreeView component for PostState mode.
 SplitView shows before and after states side by side.
-DiffView shows changes highlighted (to be fully implemented in subtask-9-4).
+DiffView shows changes highlighted with "changes only" filter option.
 
 -}
 viewSelectedState : Model -> Html Msg
@@ -818,16 +867,8 @@ viewSelectedState model =
         SplitView ->
             viewSplitMode model isFirstMessage
 
-        DiffView _ ->
-            div [ class "bg-base-100 rounded-lg border border-base-300 p-4" ]
-                [ p [ class "text-base-content/60" ]
-                    [ text "Diff view will be fully implemented in subtask-9-4" ]
-                , TreeView.view
-                    { onSelect = Nothing
-                    , toMsg = TreeViewMsg
-                    }
-                    model.treeViewState
-                ]
+        DiffView opts ->
+            viewDiffMode model opts
 
 
 {-| Render the split view mode with before and after states side by side.
@@ -887,6 +928,116 @@ viewInitialStateMessage =
             , p [ class "text-xs mt-1" ] [ text "This is the first message - no previous state available" ]
             ]
         ]
+
+
+{-| Render the diff view mode with change highlighting.
+
+Shows the model state with changed values highlighted. When `changesOnly` is true,
+only paths with changes are displayed.
+
+-}
+viewDiffMode : Model -> { changesOnly : Bool } -> Html Msg
+viewDiffMode model opts =
+    let
+        changeCount =
+            List.length model.changedPaths
+
+        -- Get the selected entry's modelAfter for rendering
+        maybeAfterState =
+            model.selectedIndex
+                |> Maybe.andThen
+                    (\idx ->
+                        model.logEntries
+                            |> List.drop idx
+                            |> List.head
+                            |> Maybe.map .modelAfter
+                    )
+
+        -- Convert Diff.Change to TreeView.Change
+        treeViewChanges =
+            Dict.map (\_ change -> diffChangeToTreeViewChange change) model.changes
+
+        diffConfig =
+            { changedPaths = model.changedPaths
+            , changes = treeViewChanges
+            , changesOnly = opts.changesOnly
+            , onToggleExpand = DiffToggleExpand
+            }
+    in
+    div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
+        [ -- Header with change count
+          div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
+            [ h3 [ class "font-semibold text-base" ] [ text "Diff View" ]
+            , div [ class "flex items-center gap-2" ]
+                [ if changeCount > 0 then
+                    span [ class "badge badge-warning badge-sm" ]
+                        [ text (String.fromInt changeCount ++ " changes") ]
+
+                  else
+                    span [ class "badge badge-success badge-sm" ]
+                        [ text "No changes" ]
+                , if opts.changesOnly then
+                    span [ class "badge badge-info badge-sm" ]
+                        [ text "Filtered" ]
+
+                  else
+                    text ""
+                ]
+            ]
+
+        -- Content area
+        , div [ class "flex-1 overflow-auto p-4" ]
+            [ if opts.changesOnly && changeCount == 0 then
+                div [ class "flex items-center justify-center h-32" ]
+                    [ div [ class "text-center text-base-content/60" ]
+                        [ p [ class "text-sm" ] [ text "No changes detected" ]
+                        , p [ class "text-xs mt-1" ] [ text "The state is identical before and after this message" ]
+                        ]
+                    ]
+
+              else
+                case maybeAfterState of
+                    Just afterJson ->
+                        TreeView.viewDiff diffConfig afterJson model.diffExpandedPaths
+
+                    Nothing ->
+                        TreeView.viewEmpty
+            ]
+
+        -- Legend
+        , div [ class "flex items-center gap-4 px-4 py-2 border-t border-base-300 bg-base-200/30 text-xs" ]
+            [ span [ class "flex items-center gap-1" ]
+                [ span [ class "w-3 h-3 bg-warning/20 border-l-2 border-warning" ] []
+                , text "Modified"
+                ]
+            , span [ class "flex items-center gap-1" ]
+                [ span [ class "w-3 h-3 bg-success/20 border-l-2 border-success" ] []
+                , text "Added"
+                ]
+            , span [ class "flex items-center gap-1" ]
+                [ span [ class "w-3 h-3 bg-error/20 border-l-2 border-error" ] []
+                , text "Removed"
+                ]
+            ]
+        ]
+
+
+{-| Convert a Diff.Change to TreeView.Change.
+-}
+diffChangeToTreeViewChange : Diff.Change -> TreeView.Change
+diffChangeToTreeViewChange change =
+    case change of
+        Diff.Added ->
+            TreeView.Added
+
+        Diff.Removed ->
+            TreeView.Removed
+
+        Diff.Modified ->
+            TreeView.Modified
+
+        Diff.TypeChanged ->
+            TreeView.TypeChanged
 
 
 {-| Render the effects footer section.

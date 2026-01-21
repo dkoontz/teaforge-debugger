@@ -14,6 +14,9 @@
     <!-- Load compiled Elm application -->
     <script src="dist/elm.js"></script>
 
+    <!-- Load Split.js for resizable panels -->
+    <script src="node_modules/split.js/dist/split.min.js"></script>
+
     <!-- Initialize Elm app and wire up ports -->
     <script>
         // Initialize the Elm application
@@ -82,6 +85,53 @@
                 app.ports.incoming.send(message);
             }
         }
+
+        // Initialize Split.js for resizable panels once Elm renders the elements
+        // The sidebar and main content panels must have IDs 'split-sidebar' and 'split-main'
+        function initSplit() {
+            const sidebar = document.getElementById('split-sidebar');
+            const main = document.getElementById('split-main');
+
+            if (sidebar && main) {
+                Split(['#split-sidebar', '#split-main'], {
+                    sizes: [25, 75],           // Initial sizes: 25% sidebar, 75% main
+                    minSize: [200, 400],       // Minimum sizes in pixels
+                    gutterSize: 8,             // Width of the drag handle
+                    cursor: 'col-resize',      // Cursor when hovering gutter
+                    direction: 'horizontal',   // Horizontal split (side by side)
+                    snapOffset: 0,             // Disable snapping
+                    dragInterval: 1,           // Update on every pixel of drag
+                    elementStyle: function(dimension, size, gutterSize) {
+                        return {
+                            'flex-basis': 'calc(' + size + '% - ' + gutterSize + 'px)'
+                        };
+                    },
+                    gutterStyle: function(dimension, gutterSize) {
+                        return {
+                            'flex-basis': gutterSize + 'px'
+                        };
+                    }
+                });
+                return true;
+            }
+            return false;
+        }
+
+        // Use MutationObserver to detect when Elm renders the split elements
+        const observer = new MutationObserver(function(mutations, obs) {
+            if (initSplit()) {
+                obs.disconnect(); // Stop observing once Split is initialized
+            }
+        });
+
+        // Start observing DOM changes in the Elm app container
+        observer.observe(document.getElementById('elm-app'), {
+            childList: true,
+            subtree: true
+        });
+
+        // Also try to initialize immediately in case elements already exist
+        initSplit();
     </script>
 </body>
 </html>

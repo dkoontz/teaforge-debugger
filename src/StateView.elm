@@ -408,7 +408,8 @@ viewInitialStateMessage =
 {-| Render the diff view showing changes highlighted.
 
 This view displays the after state with changed values visually distinguished.
-When `changesOnly` is true, only the changed paths are shown.
+When `changesOnly` is true, only the changed paths are shown. For the first
+message, shows a notice that there's no previous state to compare against.
 
 -}
 viewDiffView : Config msg -> { changesOnly : Bool } -> Html msg
@@ -425,18 +426,22 @@ viewDiffView config opts =
             }
     in
     div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
-        [ -- Header with change count
+        [ -- Header with change count and first message indicator
           div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
             [ h3 [ class "font-semibold text-base" ] [ text "Diff View" ]
             , div [ class "flex items-center gap-2" ]
-                [ if changeCount > 0 then
+                [ if config.isFirstMessage then
+                    span [ class "badge badge-info badge-sm" ]
+                        [ text "Initial state" ]
+
+                  else if changeCount > 0 then
                     span [ class "badge badge-warning badge-sm" ]
                         [ text (String.fromInt changeCount ++ " changes") ]
 
                   else
                     span [ class "badge badge-success badge-sm" ]
                         [ text "No changes" ]
-                , if opts.changesOnly then
+                , if opts.changesOnly && not config.isFirstMessage then
                     span [ class "badge badge-info badge-sm" ]
                         [ text "Filtered" ]
 
@@ -447,7 +452,10 @@ viewDiffView config opts =
 
         -- Content area
         , div [ class "flex-1 overflow-auto p-4" ]
-            [ if opts.changesOnly && changeCount == 0 then
+            [ if config.isFirstMessage then
+                viewInitialStateDiffContent config
+
+              else if opts.changesOnly && changeCount == 0 then
                 div [ class "flex items-center justify-center h-32" ]
                     [ div [ class "text-center text-base-content/60" ]
                         [ p [ class "text-sm" ] [ text "No changes detected" ]
@@ -464,19 +472,50 @@ viewDiffView config opts =
                         TreeView.viewEmpty
             ]
 
-        -- Legend
-        , div [ class "flex items-center gap-4 px-4 py-2 border-t border-base-300 bg-base-200/30 text-xs" ]
-            [ span [ class "flex items-center gap-1" ]
-                [ span [ class "w-3 h-3 bg-warning/20 border-l-2 border-warning" ] []
-                , text "Modified"
+        -- Legend (hidden for first message since no diff is meaningful)
+        , if config.isFirstMessage then
+            text ""
+
+          else
+            div [ class "flex items-center gap-4 px-4 py-2 border-t border-base-300 bg-base-200/30 text-xs" ]
+                [ span [ class "flex items-center gap-1" ]
+                    [ span [ class "w-3 h-3 bg-warning/20 border-l-2 border-warning" ] []
+                    , text "Modified"
+                    ]
+                , span [ class "flex items-center gap-1" ]
+                    [ span [ class "w-3 h-3 bg-success/20 border-l-2 border-success" ] []
+                    , text "Added"
+                    ]
+                , span [ class "flex items-center gap-1" ]
+                    [ span [ class "w-3 h-3 bg-error/20 border-l-2 border-error" ] []
+                    , text "Removed"
+                    ]
                 ]
-            , span [ class "flex items-center gap-1" ]
-                [ span [ class "w-3 h-3 bg-success/20 border-l-2 border-success" ] []
-                , text "Added"
+        ]
+
+
+{-| Render the initial state content for diff view when it's the first message.
+
+Shows an informational alert and the current state as a regular tree view.
+
+-}
+viewInitialStateDiffContent : Config msg -> Html msg
+viewInitialStateDiffContent config =
+    div [ class "space-y-4" ]
+        [ -- Info message
+          div [ class "alert alert-info" ]
+            [ div [ class "flex items-center gap-2" ]
+                [ span [ class "text-lg" ] [ text "🎬" ]
+                , div []
+                    [ p [ class "font-medium" ] [ text "Initial State" ]
+                    , p [ class "text-sm opacity-80" ] [ text "This is the first message - no previous state to compare against" ]
+                    ]
                 ]
-            , span [ class "flex items-center gap-1" ]
-                [ span [ class "w-3 h-3 bg-error/20 border-l-2 border-error" ] []
-                , text "Removed"
-                ]
+            ]
+
+        -- Show the current state as a regular tree view
+        , div [ class "border border-base-300 rounded-lg p-4 bg-base-100" ]
+            [ h4 [ class "text-sm font-medium mb-3 text-base-content/70" ] [ text "Current State:" ]
+            , TreeView.view config.treeViewConfig config.treeViewState
             ]
         ]

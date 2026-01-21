@@ -922,6 +922,14 @@ viewSearchNavigation model =
 
         hasMatches =
             matchCount > 0 && not (String.isEmpty model.searchQuery)
+
+        -- Show "0 of 0" when no matches, "X of Y" when there are matches
+        displayIndex =
+            if matchCount == 0 then
+                0
+
+            else
+                model.currentMatchIndex + 1
     in
     div [ class "flex items-center gap-1" ]
         [ button
@@ -936,7 +944,7 @@ viewSearchNavigation model =
           else
             span [ class "badge badge-sm w-16" ]
                 [ text
-                    (String.fromInt (model.currentMatchIndex + 1)
+                    (String.fromInt displayIndex
                         ++ " of "
                         ++ String.fromInt matchCount
                     )
@@ -966,7 +974,7 @@ viewStateContent model =
             _ ->
                 case model.selectedIndex of
                     Nothing ->
-                        viewNoSelection
+                        viewNoSelection model
 
                     Just _ ->
                         viewSelectedState model
@@ -987,14 +995,33 @@ viewLoadingState =
 
 
 {-| Render placeholder when no message is selected.
+
+Shows different messages depending on whether log entries have been loaded.
+
 -}
-viewNoSelection : Html Msg
-viewNoSelection =
+viewNoSelection : Model -> Html Msg
+viewNoSelection model =
     div [ class "h-full flex items-center justify-center" ]
         [ div [ class "text-center text-base-content/60" ]
-            [ p [ class "text-lg" ] [ text "No message selected" ]
-            , p [ class "text-sm mt-2" ] [ text "Select a message from the sidebar to view its state" ]
-            ]
+            (if List.isEmpty model.logEntries then
+                -- No file loaded yet
+                [ div [ class "text-5xl mb-4" ] [ text "📂" ]
+                , p [ class "text-lg font-medium" ] [ text "No file loaded" ]
+                , p [ class "text-sm mt-2" ] [ text "Click 'Open File' to load a TeaForge log file" ]
+                , button
+                    [ class "btn btn-primary btn-sm mt-4"
+                    , onClick OpenFileDialog
+                    ]
+                    [ text "Open File" ]
+                ]
+
+             else
+                -- File loaded but no message selected
+                [ div [ class "text-5xl mb-4" ] [ text "👆" ]
+                , p [ class "text-lg font-medium" ] [ text "No message selected" ]
+                , p [ class "text-sm mt-2" ] [ text "Select a message from the sidebar to view its state" ]
+                ]
+            )
         ]
 
 
@@ -1020,7 +1047,7 @@ viewSelectedState model =
             viewSplitMode model isFirstMessage
 
         DiffView opts ->
-            viewDiffMode model opts
+            viewDiffMode model opts isFirstMessage
 
 
 {-| Render the post-state view mode.
@@ -1151,11 +1178,12 @@ viewInitialStateMessage =
 {-| Render the diff view mode with change highlighting.
 
 Shows the model state with changed values highlighted. When `changesOnly` is true,
-only paths with changes are displayed.
+only paths with changes are displayed. For the first message, shows a notice
+that there's no previous state to compare against.
 
 -}
-viewDiffMode : Model -> { changesOnly : Bool } -> Html Msg
-viewDiffMode model opts =
+viewDiffMode : Model -> { changesOnly : Bool } -> Bool -> Html Msg
+viewDiffMode model opts isFirstMessage =
     let
         changeCount =
             List.length model.changedPaths
@@ -1183,18 +1211,22 @@ viewDiffMode model opts =
             }
     in
     div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
-        [ -- Header with change count
+        [ -- Header with change count and first message indicator
           div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
             [ h3 [ class "font-semibold text-base" ] [ text "Diff View" ]
             , div [ class "flex items-center gap-2" ]
-                [ if changeCount > 0 then
+                [ if isFirstMessage then
+                    span [ class "badge badge-info badge-sm" ]
+                        [ text "Initial state" ]
+
+                  else if changeCount > 0 then
                     span [ class "badge badge-warning badge-sm" ]
                         [ text (String.fromInt changeCount ++ " changes") ]
 
                   else
                     span [ class "badge badge-success badge-sm" ]
                         [ text "No changes" ]
-                , if opts.changesOnly then
+                , if opts.changesOnly && not isFirstMessage then
                     span [ class "badge badge-info badge-sm" ]
                         [ text "Filtered" ]
 
@@ -1205,7 +1237,10 @@ viewDiffMode model opts =
 
         -- Content area
         , div [ class "flex-1 overflow-auto p-4" ]
-            [ if opts.changesOnly && changeCount == 0 then
+            [ if isFirstMessage then
+                viewInitialStateDiffMessage maybeAfterState model
+
+              else if opts.changesOnly && changeCount == 0 then
                 div [ class "flex items-center justify-center h-32" ]
                     [ div [ class "text-center text-base-content/60" ]
                         [ p [ class "text-sm" ] [ text "No changes detected" ]
@@ -1222,20 +1257,56 @@ viewDiffMode model opts =
                         TreeView.viewEmpty
             ]
 
-        -- Legend
-        , div [ class "flex items-center gap-4 px-4 py-2 border-t border-base-300 bg-base-200/30 text-xs" ]
-            [ span [ class "flex items-center gap-1" ]
-                [ span [ class "w-3 h-3 bg-warning/20 border-l-2 border-warning" ] []
-                , text "Modified"
+        -- Legend (hidden for first message since no diff is meaningful)
+        , if isFirstMessage then
+            text ""
+
+          else
+            div [ class "flex items-center gap-4 px-4 py-2 border-t border-base-300 bg-base-200/30 text-xs" ]
+                [ span [ class "flex items-center gap-1" ]
+                    [ span [ class "w-3 h-3 bg-warning/20 border-l-2 border-warning" ] []
+                    , text "Modified"
+                    ]
+                , span [ class "flex items-center gap-1" ]
+                    [ span [ class "w-3 h-3 bg-success/20 border-l-2 border-success" ] []
+                    , text "Added"
+                    ]
+                , span [ class "flex items-center gap-1" ]
+                    [ span [ class "w-3 h-3 bg-error/20 border-l-2 border-error" ] []
+                    , text "Removed"
+                    ]
                 ]
-            , span [ class "flex items-center gap-1" ]
-                [ span [ class "w-3 h-3 bg-success/20 border-l-2 border-success" ] []
-                , text "Added"
+        ]
+
+
+{-| Render the initial state message for diff view when it's the first message.
+
+For the first message, there's no meaningful diff since there's no previous
+state to compare against. Shows the initial state with an explanation.
+
+-}
+viewInitialStateDiffMessage : Maybe D.Value -> Model -> Html Msg
+viewInitialStateDiffMessage maybeAfterState model =
+    div [ class "space-y-4" ]
+        [ -- Info message
+          div [ class "alert alert-info" ]
+            [ div [ class "flex items-center gap-2" ]
+                [ span [ class "text-lg" ] [ text "🎬" ]
+                , div []
+                    [ p [ class "font-medium" ] [ text "Initial State" ]
+                    , p [ class "text-sm opacity-80" ] [ text "This is the first message - no previous state to compare against" ]
+                    ]
                 ]
-            , span [ class "flex items-center gap-1" ]
-                [ span [ class "w-3 h-3 bg-error/20 border-l-2 border-error" ] []
-                , text "Removed"
-                ]
+            ]
+
+        -- Show the current state as a regular tree view
+        , div [ class "border border-base-300 rounded-lg p-4 bg-base-100" ]
+            [ h4 [ class "text-sm font-medium mb-3 text-base-content/70" ] [ text "Current State:" ]
+            , TreeView.view
+                { onSelect = Nothing
+                , toMsg = TreeViewMsg
+                }
+                model.treeViewState
             ]
         ]
 

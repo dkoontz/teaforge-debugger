@@ -19,6 +19,7 @@ import Json.Encode as E
 import LogParser exposing (ParseError(..), parseLogFile)
 import MessageList
 import Ports
+import Search
 import Set exposing (Set)
 import TreeView
 import Types exposing (..)
@@ -339,6 +340,19 @@ update msg model =
                     diffResult
                         |> Maybe.map .changes
                         |> Maybe.withDefault Dict.empty
+
+                -- Re-run search if there's an active query
+                searchResult =
+                    if String.isEmpty model.searchQuery then
+                        { matches = [], matchCount = 0, pathsWithMatches = Set.empty }
+
+                    else
+                        maybeEntry
+                            |> Maybe.map
+                                (\entry ->
+                                    Search.search model.searchQuery entry.modelAfter
+                                )
+                            |> Maybe.withDefault { matches = [], matchCount = 0, pathsWithMatches = Set.empty }
             in
             ( { model
                 | selectedIndex = Just index
@@ -346,6 +360,15 @@ update msg model =
                 , beforeTreeViewState = newBeforeTreeState
                 , changedPaths = newChangedPaths
                 , changes = newChanges
+                , searchMatches = searchResult.matches
+                , currentMatchIndex =
+                    if List.isEmpty searchResult.matches then
+                        0
+
+                    else
+                        -- Try to preserve the current match index, or reset to 0
+                        min model.currentMatchIndex (List.length searchResult.matches - 1)
+                            |> max 0
               }
             , Cmd.none
             )
@@ -358,10 +381,36 @@ update msg model =
 
         -- Search
         SetSearchQuery query ->
+            let
+                -- Get the current modelAfter from selected entry
+                maybeAfterState =
+                    model.selectedIndex
+                        |> Maybe.andThen
+                            (\idx ->
+                                model.logEntries
+                                    |> List.drop idx
+                                    |> List.head
+                                    |> Maybe.map .modelAfter
+                            )
+
+                -- Perform search on the current state
+                searchResult =
+                    case maybeAfterState of
+                        Just afterState ->
+                            Search.search query afterState
+
+                        Nothing ->
+                            { matches = [], matchCount = 0, pathsWithMatches = Set.empty }
+            in
             ( { model
                 | searchQuery = query
-                , searchMatches = []
-                , currentMatchIndex = 0
+                , searchMatches = searchResult.matches
+                , currentMatchIndex =
+                    if List.isEmpty searchResult.matches then
+                        0
+
+                    else
+                        0
               }
             , Cmd.none
             )

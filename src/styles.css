@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom base styles */
+@layer base {
+  html,
+  body {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-base-100 text-base-content;
+  }
+}
+
+/* Custom component styles */
+@layer components {
+  /* Tree view node styling */
+  .tree-node {
+    @apply py-0.5 px-2 rounded hover:bg-base-200 cursor-pointer;
+  }
+
+  .tree-node-expanded {
+    @apply font-medium;
+  }
+
+  .tree-node-collapsed {
+    @apply font-normal;
+  }
+
+  /* Tree view value styling */
+  .tree-value-string {
+    @apply text-success;
+  }
+
+  .tree-value-number {
+    @apply text-info;
+  }
+
+  .tree-value-boolean {
+    @apply text-warning;
+  }
+
+  .tree-value-null {
+    @apply text-base-content/50 italic;
+  }
+
+  /* Diff highlighting */
+  .diff-changed {
+    @apply bg-warning/20 border-l-2 border-warning;
+  }
+
+  .diff-added {
+    @apply bg-success/20 border-l-2 border-success;
+  }
+
+  .diff-removed {
+    @apply bg-error/20 border-l-2 border-error;
+  }
+
+  /* Search match highlighting */
+  .search-match {
+    @apply bg-primary/30 ring-2 ring-primary/50 rounded;
+  }
+
+  .search-match-current {
+    @apply bg-primary/50 ring-2 ring-primary rounded;
+  }
+
+  /* Message list item */
+  .message-item {
+    @apply py-2 px-3 cursor-pointer rounded-lg transition-colors;
+  }
+
+  .message-item:hover {
+    @apply bg-base-200;
+  }
+
+  .message-item-selected {
+    @apply bg-primary/10 text-primary;
+  }
+}
+
+/* Custom utility styles */
+@layer utilities {
+  /* Scrollbar styling */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    @apply w-2;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-base-200 rounded;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-base-300 rounded hover:bg-base-content/30;
+  }
+}

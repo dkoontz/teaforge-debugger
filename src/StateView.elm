@@ -28,8 +28,10 @@ import Types exposing (..)
 
   - `viewMode`: The currently active view mode
   - `onViewModeChange`: Callback when user changes the view mode
-  - `treeViewState`: Current state of the tree view component
+  - `treeViewState`: Current state of the tree view component (for after state)
   - `treeViewConfig`: Configuration for the tree view (message wrapping, etc.)
+  - `beforeTreeViewState`: Current state of the before tree view (for split view)
+  - `beforeTreeViewConfig`: Configuration for the before tree view
   - `beforeState`: The model state before processing (for split/diff views)
   - `afterState`: The model state after processing (always shown)
   - `searchQuery`: Current search query string
@@ -42,6 +44,7 @@ import Types exposing (..)
   - `onToggleFilter`: Callback to toggle filter mode
   - `changedPaths`: List of paths that changed (for diff view)
   - `hasSelection`: Whether a message is currently selected
+  - `isFirstMessage`: Whether this is the first message (no before state)
 
 -}
 type alias Config msg =
@@ -49,6 +52,8 @@ type alias Config msg =
     , onViewModeChange : ViewMode -> msg
     , treeViewState : TreeView.State
     , treeViewConfig : TreeView.Config msg
+    , beforeTreeViewState : TreeView.State
+    , beforeTreeViewConfig : TreeView.Config msg
     , beforeState : Maybe D.Value
     , afterState : Maybe D.Value
     , searchQuery : String
@@ -61,6 +66,7 @@ type alias Config msg =
     , onToggleFilter : msg
     , changedPaths : List TreePath
     , hasSelection : Bool
+    , isFirstMessage : Bool
     }
 
 
@@ -343,38 +349,50 @@ This view displays two tree views:
   - Left panel: State before processing the message
   - Right panel: State after processing the message
 
-Note: Full tree view for "before" state will be implemented in subtask-9-3.
-Currently shows a placeholder for the before state.
+Both panels use independent TreeView states to allow separate expand/collapse
+operations. The first message has no "before" state and shows a placeholder.
 
 -}
 viewSplitView : Config msg -> Html msg
 viewSplitView config =
     div [ class "grid grid-cols-2 gap-4 h-full" ]
-        [ div [ class "bg-base-100 rounded-lg border border-base-300 p-4 overflow-auto" ]
-            [ div [ class "flex items-center justify-between mb-3 pb-2 border-b border-base-300" ]
+        [ -- Before (left) panel
+          div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col overflow-hidden" ]
+            [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
                 [ h3 [ class "font-semibold text-base" ] [ text "Before" ]
                 , span [ class "badge badge-ghost badge-sm" ] [ text "Previous state" ]
                 ]
-            , case config.beforeState of
-                Just _ ->
-                    -- Placeholder for before state tree view (will be implemented in subtask-9-3)
-                    div [ class "text-base-content/60 text-sm" ]
-                        [ text "Before state tree view - to be implemented in subtask-9-3" ]
+            , div [ class "flex-1 overflow-auto p-4" ]
+                [ if config.isFirstMessage then
+                    viewInitialStateMessage
 
-                Nothing ->
-                    div [ class "flex items-center justify-center h-32" ]
-                        [ div [ class "text-center text-base-content/60" ]
-                            [ p [ class "text-sm" ] [ text "Initial State" ]
-                            , p [ class "text-xs mt-1" ] [ text "No previous state available for first message" ]
-                            ]
-                        ]
+                  else
+                    TreeView.view config.beforeTreeViewConfig config.beforeTreeViewState
+                ]
             ]
-        , div [ class "bg-base-100 rounded-lg border border-base-300 p-4 overflow-auto" ]
-            [ div [ class "flex items-center justify-between mb-3 pb-2 border-b border-base-300" ]
+
+        -- After (right) panel
+        , div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col overflow-hidden" ]
+            [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
                 [ h3 [ class "font-semibold text-base" ] [ text "After" ]
                 , span [ class "badge badge-primary badge-sm" ] [ text "Current state" ]
                 ]
-            , TreeView.view config.treeViewConfig config.treeViewState
+            , div [ class "flex-1 overflow-auto p-4" ]
+                [ TreeView.view config.treeViewConfig config.treeViewState
+                ]
+            ]
+        ]
+
+
+{-| Render a message for the initial state (first message has no "before" state).
+-}
+viewInitialStateMessage : Html msg
+viewInitialStateMessage =
+    div [ class "flex items-center justify-center h-full" ]
+        [ div [ class "text-center text-base-content/60" ]
+            [ div [ class "text-4xl mb-3" ] [ text "🎬" ]
+            , p [ class "text-sm font-medium" ] [ text "Initial State" ]
+            , p [ class "text-xs mt-1" ] [ text "This is the first message - no previous state available" ]
             ]
         ]
 

@@ -57,6 +57,7 @@ This structure follows the design from the spec, managing:
   - View mode (post-state, split, diff)
   - Search and filter state
   - UI state (sidebar width, loading state)
+  - Tree view states for after and before states (split view)
 
 -}
 type alias Model =
@@ -72,6 +73,7 @@ type alias Model =
     , errorMessage : Maybe String
     , skippedEntries : Int
     , treeViewState : TreeView.State
+    , beforeTreeViewState : TreeView.State
     }
 
 
@@ -94,6 +96,7 @@ init _ =
       , errorMessage = Nothing
       , skippedEntries = 0
       , treeViewState = TreeView.init
+      , beforeTreeViewState = TreeView.init
       }
     , Cmd.none
     )
@@ -128,8 +131,10 @@ type Msg
     | NextMatch
     | PreviousMatch
     | ToggleFilter
-      -- Tree View
+      -- Tree View (After state)
     | TreeViewMsg TreeView.Msg
+      -- Tree View (Before state - for split view)
+    | BeforeTreeViewMsg TreeView.Msg
       -- Port Communication
     | GotPortMessage E.Value
       -- Error Handling
@@ -207,6 +212,21 @@ update msg model =
                                                                 TreeView.init
                                                     )
                                                 |> Maybe.withDefault TreeView.init
+
+                                        -- Parse the first entry's modelBefore for split view
+                                        initialBeforeTreeState =
+                                            entries
+                                                |> List.head
+                                                |> Maybe.map
+                                                    (\entry ->
+                                                        case TreeView.parseValue entry.modelBefore TreeView.init of
+                                                            Ok state ->
+                                                                state
+
+                                                            Err _ ->
+                                                                TreeView.init
+                                                    )
+                                                |> Maybe.withDefault TreeView.init
                                     in
                                     ( { model
                                         | loadingState = Loaded
@@ -225,6 +245,7 @@ update msg model =
                                             else
                                                 Nothing
                                         , treeViewState = initialTreeState
+                                        , beforeTreeViewState = initialBeforeTreeState
                                       }
                                     , Cmd.none
                                     )
@@ -255,13 +276,31 @@ update msg model =
         SelectMessage index ->
             let
                 -- Get the selected log entry's modelAfter and parse it for tree view
-                newTreeState =
+                maybeEntry =
                     model.logEntries
                         |> List.drop index
                         |> List.head
+
+                newTreeState =
+                    maybeEntry
                         |> Maybe.map
                             (\entry ->
                                 case TreeView.parseValue entry.modelAfter model.treeViewState of
+                                    Ok state ->
+                                        state
+
+                                    Err _ ->
+                                        -- If parsing fails, keep the default state
+                                        TreeView.init
+                            )
+                        |> Maybe.withDefault TreeView.init
+
+                -- Parse the before state for split view
+                newBeforeTreeState =
+                    maybeEntry
+                        |> Maybe.map
+                            (\entry ->
+                                case TreeView.parseValue entry.modelBefore model.beforeTreeViewState of
                                     Ok state ->
                                         state
 
@@ -274,6 +313,7 @@ update msg model =
             ( { model
                 | selectedIndex = Just index
                 , treeViewState = newTreeState
+                , beforeTreeViewState = newBeforeTreeState
               }
             , Cmd.none
             )
@@ -325,9 +365,15 @@ update msg model =
             , Cmd.none
             )
 
-        -- Tree View
+        -- Tree View (After state)
         TreeViewMsg treeMsg ->
             ( { model | treeViewState = TreeView.update treeMsg model.treeViewState }
+            , Cmd.none
+            )
+
+        -- Tree View (Before state - for split view)
+        BeforeTreeViewMsg treeMsg ->
+            ( { model | beforeTreeViewState = TreeView.update treeMsg model.beforeTreeViewState }
             , Cmd.none
             )
 
@@ -747,12 +793,18 @@ viewNoSelection =
 
 {-| Render the state view for the selected message.
 
-Displays the model state using TreeView component for PostState mode,
-with placeholder views for SplitView and DiffView (phase-9).
+Displays the model state using TreeView component for PostState mode.
+SplitView shows before and after states side by side.
+DiffView shows changes highlighted (to be fully implemented in subtask-9-4).
 
 -}
 viewSelectedState : Model -> Html Msg
 viewSelectedState model =
+    let
+        -- Check if this is the first message (index 0)
+        isFirstMessage =
+            model.selectedIndex == Just 0
+    in
     case model.viewMode of
         PostState ->
             div [ class "bg-base-100 rounded-lg border border-base-300 p-4 h-full overflow-auto" ]
@@ -764,24 +816,77 @@ viewSelectedState model =
                 ]
 
         SplitView ->
-            div [ class "grid grid-cols-2 gap-4 h-full" ]
-                [ div [ class "bg-base-100 rounded-lg border border-base-300 p-4" ]
-                    [ h3 [ class "font-semibold mb-2" ] [ text "Before" ]
-                    , p [ class "text-base-content/60 text-sm" ]
-                        [ text "Split view will be implemented in phase-9" ]
-                    ]
-                , div [ class "bg-base-100 rounded-lg border border-base-300 p-4" ]
-                    [ h3 [ class "font-semibold mb-2" ] [ text "After" ]
-                    , p [ class "text-base-content/60 text-sm" ]
-                        [ text "Split view will be implemented in phase-9" ]
-                    ]
-                ]
+            viewSplitMode model isFirstMessage
 
         DiffView _ ->
             div [ class "bg-base-100 rounded-lg border border-base-300 p-4" ]
                 [ p [ class "text-base-content/60" ]
-                    [ text "Diff view will be implemented in phase-9" ]
+                    [ text "Diff view will be fully implemented in subtask-9-4" ]
+                , TreeView.view
+                    { onSelect = Nothing
+                    , toMsg = TreeViewMsg
+                    }
+                    model.treeViewState
                 ]
+
+
+{-| Render the split view mode with before and after states side by side.
+
+The before panel shows the model state before processing the selected message.
+The after panel shows the model state after processing.
+The first message has no "before" state and shows a placeholder.
+
+-}
+viewSplitMode : Model -> Bool -> Html Msg
+viewSplitMode model isFirstMessage =
+    div [ class "grid grid-cols-2 gap-4 h-full" ]
+        [ -- Before (left) panel
+          div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col overflow-hidden" ]
+            [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
+                [ h3 [ class "font-semibold text-base" ] [ text "Before" ]
+                , span [ class "badge badge-ghost badge-sm" ] [ text "Previous state" ]
+                ]
+            , div [ class "flex-1 overflow-auto p-4" ]
+                [ if isFirstMessage then
+                    viewInitialStateMessage
+
+                  else
+                    TreeView.view
+                        { onSelect = Nothing
+                        , toMsg = BeforeTreeViewMsg
+                        }
+                        model.beforeTreeViewState
+                ]
+            ]
+
+        -- After (right) panel
+        , div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col overflow-hidden" ]
+            [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
+                [ h3 [ class "font-semibold text-base" ] [ text "After" ]
+                , span [ class "badge badge-primary badge-sm" ] [ text "Current state" ]
+                ]
+            , div [ class "flex-1 overflow-auto p-4" ]
+                [ TreeView.view
+                    { onSelect = Nothing
+                    , toMsg = TreeViewMsg
+                    }
+                    model.treeViewState
+                ]
+            ]
+        ]
+
+
+{-| Render a message for the initial state (first message has no "before" state).
+-}
+viewInitialStateMessage : Html Msg
+viewInitialStateMessage =
+    div [ class "flex items-center justify-center h-full" ]
+        [ div [ class "text-center text-base-content/60" ]
+            [ div [ class "text-4xl mb-3" ] [ text "🎬" ]
+            , p [ class "text-sm font-medium" ] [ text "Initial State" ]
+            , p [ class "text-xs mt-1" ] [ text "This is the first message - no previous state available" ]
+            ]
+        ]
 
 
 {-| Render the effects footer section.

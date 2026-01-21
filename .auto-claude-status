@@ -3,23 +3,23 @@
   "spec": "001-this-is-a-greenfield-application-that-is-a-utility",
   "state": "building",
   "subtasks": {
-    "completed": 28,
+    "completed": 29,
     "total": 35,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Resizable Panels",
+    "current": "Polish and Edge Cases",
     "id": null,
-    "total": 3
+    "total": 4
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 29,
+    "number": 30,
     "started_at": "2026-01-21T15:27:58.844852"
   },
-  "last_update": "2026-01-21T16:52:50.157000"
+  "last_update": "2026-01-21T16:53:53.171111"
 }

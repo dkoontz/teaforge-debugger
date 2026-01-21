@@ -951,16 +951,38 @@ viewSearchNavigation model =
 
 
 {-| Render the state content area based on view mode.
+
+Shows a loading indicator when a file is being loaded, otherwise displays
+the appropriate state view based on selection.
+
 -}
 viewStateContent : Model -> Html Msg
 viewStateContent model =
     div [ class "flex-1 overflow-auto p-4" ]
-        [ case model.selectedIndex of
-            Nothing ->
-                viewNoSelection
+        [ case model.loadingState of
+            Loading ->
+                viewLoadingState
 
-            Just _ ->
-                viewSelectedState model
+            _ ->
+                case model.selectedIndex of
+                    Nothing ->
+                        viewNoSelection
+
+                    Just _ ->
+                        viewSelectedState model
+        ]
+
+
+{-| Render loading state placeholder when a file is being loaded.
+-}
+viewLoadingState : Html Msg
+viewLoadingState =
+    div [ class "h-full flex items-center justify-center" ]
+        [ div [ class "text-center" ]
+            [ span [ class "loading loading-spinner loading-lg text-primary" ] []
+            , p [ class "text-lg mt-4 text-base-content/80" ] [ text "Loading file..." ]
+            , p [ class "text-sm mt-2 text-base-content/60" ] [ text "Parsing log entries" ]
+            ]
         ]
 
 

@@ -1,0 +1,881 @@
+{
+  "entries": [
+    {
+      "timestamp": 1705836000000,
+      "message": {
+        "name": "Init",
+        "payload": null
+      },
+      "modelBefore": null,
+      "modelAfter": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "light",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": []
+    },
+    {
+      "timestamp": 1705836001500,
+      "message": {
+        "name": "ToggleTheme",
+        "payload": null
+      },
+      "modelBefore": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "light",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": [
+        {
+          "name": "SavePreferences",
+          "data": {
+            "key": "theme",
+            "value": "dark"
+          }
+        }
+      ]
+    },
+    {
+      "timestamp": 1705836005000,
+      "message": {
+        "name": "UpdateEmail",
+        "payload": {
+          "value": "user@example.com"
+        }
+      },
+      "modelBefore": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "user@example.com",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": []
+    },
+    {
+      "timestamp": 1705836008000,
+      "message": {
+        "name": "UpdatePassword",
+        "payload": {
+          "value": "********"
+        }
+      },
+      "modelBefore": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "user@example.com",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "user@example.com",
+          "password": "********",
+          "rememberMe": false
+        }
+      },
+      "effects": []
+    },
+    {
+      "timestamp": 1705836010000,
+      "message": {
+        "name": "SubmitLogin",
+        "payload": null
+      },
+      "modelBefore": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "user@example.com",
+          "password": "********",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": null,
+        "items": [],
+        "loading": true,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "user@example.com",
+          "password": "********",
+          "rememberMe": false
+        }
+      },
+      "effects": [
+        {
+          "name": "HttpRequest",
+          "data": {
+            "method": "POST",
+            "url": "/api/auth/login",
+            "body": {
+              "email": "user@example.com",
+              "password": "********"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "timestamp": 1705836011200,
+      "message": {
+        "name": "LoginSuccess",
+        "payload": {
+          "user": {
+            "id": 12345,
+            "name": "John Doe",
+            "email": "user@example.com",
+            "role": "admin",
+            "avatar": "https://example.com/avatars/john.jpg"
+          },
+          "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        }
+      },
+      "modelBefore": {
+        "user": null,
+        "items": [],
+        "loading": true,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "user@example.com",
+          "password": "********",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": [
+        {
+          "name": "SaveToken",
+          "data": {
+            "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        },
+        {
+          "name": "NavigateTo",
+          "data": {
+            "route": "/dashboard"
+          }
+        }
+      ]
+    },
+    {
+      "timestamp": 1705836015000,
+      "message": {
+        "name": "FetchItems",
+        "payload": null
+      },
+      "modelBefore": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [],
+        "loading": true,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": [
+        {
+          "name": "HttpRequest",
+          "data": {
+            "method": "GET",
+            "url": "/api/items",
+            "headers": {
+              "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "timestamp": 1705836016500,
+      "message": {
+        "name": "ItemsReceived",
+        "payload": {
+          "items": [
+            {
+              "id": 1,
+              "title": "First Item",
+              "description": "This is the first item in the list",
+              "status": "active",
+              "tags": ["important", "urgent"],
+              "createdAt": 1705750000000
+            },
+            {
+              "id": 2,
+              "title": "Second Item",
+              "description": "Another item with different properties",
+              "status": "pending",
+              "tags": ["review"],
+              "createdAt": 1705760000000
+            },
+            {
+              "id": 3,
+              "title": "Third Item",
+              "description": "The third item in our collection",
+              "status": "completed",
+              "tags": [],
+              "createdAt": 1705770000000
+            }
+          ]
+        }
+      },
+      "modelBefore": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [],
+        "loading": true,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [
+          {
+            "id": 1,
+            "title": "First Item",
+            "description": "This is the first item in the list",
+            "status": "active",
+            "tags": ["important", "urgent"],
+            "createdAt": 1705750000000
+          },
+          {
+            "id": 2,
+            "title": "Second Item",
+            "description": "Another item with different properties",
+            "status": "pending",
+            "tags": ["review"],
+            "createdAt": 1705760000000
+          },
+          {
+            "id": 3,
+            "title": "Third Item",
+            "description": "The third item in our collection",
+            "status": "completed",
+            "tags": [],
+            "createdAt": 1705770000000
+          }
+        ],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": []
+    },
+    {
+      "timestamp": 1705836020000,
+      "message": {
+        "name": "IncrementCounter",
+        "payload": null
+      },
+      "modelBefore": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [
+          {
+            "id": 1,
+            "title": "First Item",
+            "description": "This is the first item in the list",
+            "status": "active",
+            "tags": ["important", "urgent"],
+            "createdAt": 1705750000000
+          },
+          {
+            "id": 2,
+            "title": "Second Item",
+            "description": "Another item with different properties",
+            "status": "pending",
+            "tags": ["review"],
+            "createdAt": 1705760000000
+          },
+          {
+            "id": 3,
+            "title": "Third Item",
+            "description": "The third item in our collection",
+            "status": "completed",
+            "tags": [],
+            "createdAt": 1705770000000
+          }
+        ],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [
+          {
+            "id": 1,
+            "title": "First Item",
+            "description": "This is the first item in the list",
+            "status": "active",
+            "tags": ["important", "urgent"],
+            "createdAt": 1705750000000
+          },
+          {
+            "id": 2,
+            "title": "Second Item",
+            "description": "Another item with different properties",
+            "status": "pending",
+            "tags": ["review"],
+            "createdAt": 1705760000000
+          },
+          {
+            "id": 3,
+            "title": "Third Item",
+            "description": "The third item in our collection",
+            "status": "completed",
+            "tags": [],
+            "createdAt": 1705770000000
+          }
+        ],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 1,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": []
+    },
+    {
+      "timestamp": 1705836025000,
+      "message": {
+        "name": "UpdateItemStatus",
+        "payload": {
+          "itemId": 2,
+          "newStatus": "active"
+        }
+      },
+      "modelBefore": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [
+          {
+            "id": 1,
+            "title": "First Item",
+            "description": "This is the first item in the list",
+            "status": "active",
+            "tags": ["important", "urgent"],
+            "createdAt": 1705750000000
+          },
+          {
+            "id": 2,
+            "title": "Second Item",
+            "description": "Another item with different properties",
+            "status": "pending",
+            "tags": ["review"],
+            "createdAt": 1705760000000
+          },
+          {
+            "id": 3,
+            "title": "Third Item",
+            "description": "The third item in our collection",
+            "status": "completed",
+            "tags": [],
+            "createdAt": 1705770000000
+          }
+        ],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 1,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [
+          {
+            "id": 1,
+            "title": "First Item",
+            "description": "This is the first item in the list",
+            "status": "active",
+            "tags": ["important", "urgent"],
+            "createdAt": 1705750000000
+          },
+          {
+            "id": 2,
+            "title": "Second Item",
+            "description": "Another item with different properties",
+            "status": "active",
+            "tags": ["review"],
+            "createdAt": 1705760000000
+          },
+          {
+            "id": 3,
+            "title": "Third Item",
+            "description": "The third item in our collection",
+            "status": "completed",
+            "tags": [],
+            "createdAt": 1705770000000
+          }
+        ],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 1,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": [
+        {
+          "name": "HttpRequest",
+          "data": {
+            "method": "PATCH",
+            "url": "/api/items/2",
+            "body": {
+              "status": "active"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "timestamp": 1705836030000,
+      "message": {
+        "name": "DisableNotifications",
+        "payload": null
+      },
+      "modelBefore": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [
+          {
+            "id": 1,
+            "title": "First Item",
+            "description": "This is the first item in the list",
+            "status": "active",
+            "tags": ["important", "urgent"],
+            "createdAt": 1705750000000
+          },
+          {
+            "id": 2,
+            "title": "Second Item",
+            "description": "Another item with different properties",
+            "status": "active",
+            "tags": ["review"],
+            "createdAt": 1705760000000
+          },
+          {
+            "id": 3,
+            "title": "Third Item",
+            "description": "The third item in our collection",
+            "status": "completed",
+            "tags": [],
+            "createdAt": 1705770000000
+          }
+        ],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": true,
+          "language": "en"
+        },
+        "counter": 1,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [
+          {
+            "id": 1,
+            "title": "First Item",
+            "description": "This is the first item in the list",
+            "status": "active",
+            "tags": ["important", "urgent"],
+            "createdAt": 1705750000000
+          },
+          {
+            "id": 2,
+            "title": "Second Item",
+            "description": "Another item with different properties",
+            "status": "active",
+            "tags": ["review"],
+            "createdAt": 1705760000000
+          },
+          {
+            "id": 3,
+            "title": "Third Item",
+            "description": "The third item in our collection",
+            "status": "completed",
+            "tags": [],
+            "createdAt": 1705770000000
+          }
+        ],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": false,
+          "language": "en"
+        },
+        "counter": 1,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": [
+        {
+          "name": "SavePreferences",
+          "data": {
+            "key": "notifications",
+            "value": false
+          }
+        }
+      ]
+    },
+    {
+      "timestamp": 1705836035000,
+      "message": {
+        "name": "Logout",
+        "payload": null
+      },
+      "modelBefore": {
+        "user": {
+          "id": 12345,
+          "name": "John Doe",
+          "email": "user@example.com",
+          "role": "admin",
+          "avatar": "https://example.com/avatars/john.jpg"
+        },
+        "items": [
+          {
+            "id": 1,
+            "title": "First Item",
+            "description": "This is the first item in the list",
+            "status": "active",
+            "tags": ["important", "urgent"],
+            "createdAt": 1705750000000
+          },
+          {
+            "id": 2,
+            "title": "Second Item",
+            "description": "Another item with different properties",
+            "status": "active",
+            "tags": ["review"],
+            "createdAt": 1705760000000
+          },
+          {
+            "id": 3,
+            "title": "Third Item",
+            "description": "The third item in our collection",
+            "status": "completed",
+            "tags": [],
+            "createdAt": 1705770000000
+          }
+        ],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": false,
+          "language": "en"
+        },
+        "counter": 1,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "modelAfter": {
+        "user": null,
+        "items": [],
+        "loading": false,
+        "error": null,
+        "settings": {
+          "theme": "dark",
+          "notifications": false,
+          "language": "en"
+        },
+        "counter": 0,
+        "formData": {
+          "email": "",
+          "password": "",
+          "rememberMe": false
+        }
+      },
+      "effects": [
+        {
+          "name": "ClearToken",
+          "data": null
+        },
+        {
+          "name": "NavigateTo",
+          "data": {
+            "route": "/login"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -142,6 +142,8 @@ type Msg
     | FileReadResult { success : Bool, content : Maybe String, path : String, error : Maybe String }
       -- Navigation
     | SelectMessage Int
+    | SelectNextMessage
+    | SelectPreviousMessage
       -- View Mode
     | SetViewMode ViewMode
       -- Search
@@ -391,6 +393,44 @@ update msg model =
               }
             , Cmd.none
             )
+
+        -- Keyboard Navigation
+        SelectNextMessage ->
+            let
+                maxIndex =
+                    List.length model.logEntries - 1
+
+                newIndex =
+                    case model.selectedIndex of
+                        Just idx ->
+                            min (idx + 1) maxIndex
+
+                        Nothing ->
+                            -- If nothing selected, select first entry
+                            0
+            in
+            if List.isEmpty model.logEntries then
+                ( model, Cmd.none )
+
+            else
+                update (SelectMessage newIndex) model
+
+        SelectPreviousMessage ->
+            let
+                newIndex =
+                    case model.selectedIndex of
+                        Just idx ->
+                            max (idx - 1) 0
+
+                        Nothing ->
+                            -- If nothing selected, select last entry
+                            List.length model.logEntries - 1
+            in
+            if List.isEmpty model.logEntries then
+                ( model, Cmd.none )
+
+            else
+                update (SelectMessage newIndex) model
 
         -- View Mode
         SetViewMode mode ->
@@ -1438,9 +1478,11 @@ viewEffectData data =
 Subscribes to:
 
   - Incoming port for JavaScript messages
-  - Global keyboard events for shortcuts (Cmd/Ctrl+F for search focus)
+  - Global keyboard events for shortcuts:
+      - Cmd/Ctrl+F: Focus search input
+      - ArrowUp/ArrowDown: Navigate message list
 
-Note: We use preventDefaultOn to prevent browser's default Cmd/Ctrl+F behavior.
+Note: We use preventDefaultOn to prevent browser's default behaviors.
 
 -}
 subscriptions : Model -> Sub Msg
@@ -1456,6 +1498,8 @@ subscriptions _ =
 Handles:
 
   - Cmd/Ctrl+F: Focus the search input (prevents default browser find)
+  - ArrowUp: Select previous message in list (when not in input)
+  - ArrowDown: Select next message in list (when not in input)
 
 Returns (Msg, Bool) where Bool indicates whether to prevent default behavior.
 
@@ -1464,11 +1508,24 @@ keyboardShortcutDecoder : D.Decoder ( Msg, Bool )
 keyboardShortcutDecoder =
     D.map4
         (\key metaKey ctrlKey tagName ->
+            let
+                -- Don't handle arrow keys when focused on input elements
+                isInputElement =
+                    tagName == "INPUT" || tagName == "TEXTAREA" || tagName == "SELECT"
+            in
             -- Cmd/Ctrl+F: Focus search input
             if key == "f" && (metaKey || ctrlKey) then
                 -- Always prevent default for Cmd/Ctrl+F to avoid browser find dialog
                 -- Focus search even if already in an input (user might be in a different input)
                 ( FocusSearch, True )
+
+            else if key == "ArrowDown" && not isInputElement then
+                -- Navigate to next message in list
+                ( SelectNextMessage, True )
+
+            else if key == "ArrowUp" && not isInputElement then
+                -- Navigate to previous message in list
+                ( SelectPreviousMessage, True )
 
             else
                 ( NoOp, False )

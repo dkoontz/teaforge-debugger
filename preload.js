@@ -15,5 +15,11 @@ contextBridge.exposeInMainWorld('electron', {
 
     // Open native file dialog to select a TeaForge log file
     // @returns {Promise<{success: boolean, canceled?: boolean, filePath?: string, content?: string, error?: string}>}
-    openFileDialog: () => ipcRenderer.invoke('open-file-dialog')
+    openFileDialog: () => ipcRenderer.invoke('open-file-dialog'),
+
+    // Listen for file-opened events from main process menu (File > Open / Cmd+O)
+    // @param {function} callback - Callback to receive file data {filePath: string, content: string}
+    onFileOpened: (callback) => {
+        ipcRenderer.on('file-opened', (event, data) => callback(data));
+    }
 });

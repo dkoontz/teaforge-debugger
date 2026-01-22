@@ -86,6 +86,20 @@
             }
         }
 
+        // Listen for files opened via the File menu (Cmd+O)
+        if (window.electron.onFileOpened) {
+            window.electron.onFileOpened((data) => {
+                sendToElm({
+                    type: 'fileReadResult',
+                    payload: {
+                        success: true,
+                        content: data.content,
+                        path: data.filePath
+                    }
+                });
+            });
+        }
+
         // Initialize Split.js for resizable panels once Elm renders the elements
         // The sidebar and main content panels must have IDs 'split-sidebar' and 'split-main'
         function initSplit() {

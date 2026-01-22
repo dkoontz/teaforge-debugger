@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -75,10 +75,112 @@ ipcMain.handle('open-file-dialog', async () => {
     }
 });
 
+// Create application menu
+function createMenu() {
+    const isMac = process.platform === 'darwin';
+
+    const template = [
+        // App menu (macOS only)
+        ...(isMac ? [{
+            label: app.name,
+            submenu: [
+                { role: 'about' },
+                { type: 'separator' },
+                { role: 'services' },
+                { type: 'separator' },
+                { role: 'hide' },
+                { role: 'hideOthers' },
+                { role: 'unhide' },
+                { type: 'separator' },
+                { role: 'quit' }
+            ]
+        }] : []),
+        // File menu
+        {
+            label: 'File',
+            submenu: [
+                {
+                    label: 'Open...',
+                    accelerator: 'CmdOrCtrl+O',
+                    click: async () => {
+                        if (mainWindow) {
+                            const result = await dialog.showOpenDialog(mainWindow, {
+                                properties: ['openFile'],
+                                filters: [
+                                    { name: 'TeaForge Logs', extensions: ['log', 'json'] },
+                                    { name: 'All Files', extensions: ['*'] }
+                                ]
+                            });
+
+                            if (!result.canceled && result.filePaths.length > 0) {
+                                const filePath = result.filePaths[0];
+                                try {
+                                    const content = fs.readFileSync(filePath, 'utf8');
+                                    mainWindow.webContents.send('file-opened', { filePath, content });
+                                } catch (error) {
+                                    dialog.showErrorBox('Error', `Failed to open file: ${error.message}`);
+                                }
+                            }
+                        }
+                    }
+                },
+                { type: 'separator' },
+                isMac ? { role: 'close' } : { role: 'quit' }
+            ]
+        },
+        // Edit menu
+        {
+            label: 'Edit',
+            submenu: [
+                { role: 'undo' },
+                { role: 'redo' },
+                { type: 'separator' },
+                { role: 'cut' },
+                { role: 'copy' },
+                { role: 'paste' },
+                { role: 'selectAll' }
+            ]
+        },
+        // View menu
+        {
+            label: 'View',
+            submenu: [
+                { role: 'reload' },
+                { role: 'forceReload' },
+                { role: 'toggleDevTools' },
+                { type: 'separator' },
+                { role: 'resetZoom' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { type: 'separator' },
+                { role: 'togglefullscreen' }
+            ]
+        },
+        // Window menu
+        {
+            label: 'Window',
+            submenu: [
+                { role: 'minimize' },
+                { role: 'zoom' },
+                ...(isMac ? [
+                    { type: 'separator' },
+                    { role: 'front' }
+                ] : [
+                    { role: 'close' }
+                ])
+            ]
+        }
+    ];
+
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
+}
+
 // Handle --test-launch flag for verification
 const isTestLaunch = process.argv.includes('--test-launch');
 
 app.whenReady().then(() => {
+    createMenu();
     createWindow();
 
     // If running in test mode, quit after window is ready

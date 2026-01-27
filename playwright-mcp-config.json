@@ -1,0 +1,10 @@
+{
+  "browser": {
+    "browserName": "electron",
+    "launchOptions": {
+      "executablePath": "node_modules/.bin/electron",
+      "cwd": ".",
+      "args": ["."]
+    }
+  }
+}

@@ -1,0 +1,149 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+TeaForge Debugger is an Electron desktop application for debugging TEA (The Elm Architecture) applications. It reads JSONL log files containing state transitions and visualizes them with time-travel debugging capabilities.
+
+## Build Commands
+
+```bash
+# Build everything (Elm + CSS)
+npm run build
+
+# Build Elm only
+npm run build:elm
+
+# Build CSS only (Tailwind)
+npm run build:css
+
+# Run the Electron app
+npm start
+
+# Development with hot reload
+npm run watch:elm    # Elm with elm-live
+npm run watch:css    # Tailwind in watch mode
+
+# Run Elm tests
+npx elm-test
+```
+
+## Browser Automation (electron-agent-tools)
+
+The project uses `electron-agent-tools` for Playwright-based browser automation via CDP (Chrome DevTools Protocol). All commands are available as npm scripts.
+
+### npm Scripts
+
+```bash
+# Launch the app (with default test file)
+npm run agent:launch
+
+# Launch and wait 3 seconds before returning
+npm run agent:launch -- 3
+
+# Launch with custom log file
+LOG_FILE=/path/to/file.log npm run agent:launch
+
+# Launch without auto-opening a file
+LOG_FILE="" npm run agent:launch
+
+# Quit the app
+npm run agent:quit
+
+# Take screenshot
+npm run agent:screenshot /tmp/screenshot.png
+
+# Click by text content
+npm run agent:click "Open File"
+
+# Type into focused element
+npm run agent:type "search text"
+
+# Wait for text to appear
+npm run agent:wait-text "Messages"
+
+# Dump DOM
+npm run agent:dump-dom
+
+# List interactive elements
+npm run agent:list-selectors 20
+
+# List windows
+npm run agent:list-windows
+```
+
+The browser-tools scripts automatically read the WebSocket URL from the most recent launch session, so no manual `WS_URL` configuration is needed.
+
+### App Flags
+
+The app supports these command-line flags:
+- `--mcp-controlled` - Indicates the app is being controlled remotely (enables "agent mode" UI)
+- `--open-file=<path>` - Auto-opens the specified log file on startup
+- `--remote-debugging-port=<port>` - Enables CDP on the specified port (required for browser-tools)
+
+## Architecture
+
+### Technology Stack
+- **Frontend**: Elm 0.19.1 compiled to JS
+- **Desktop**: Electron with secure IPC
+- **Styling**: Tailwind CSS 4 + DaisyUI 5 (configured in `src/styles.css` via `@plugin`)
+
+### Elm Module Structure
+
+```
+src/
+├── Main.elm         # TEA entry point, subscriptions, port handlers
+├── Types.elm        # Core types: LogEntry, MessageData, Effect, ViewMode
+├── LogParser.elm    # JSONL log file parsing, handles multiple formats
+├── TreeView.elm     # JSON tree visualization component
+├── Diff.elm         # State diffing between before/after
+├── Search.elm       # Search through state tree
+├── MessageList.elm  # Sidebar message list component
+└── Ports.elm        # Elm-JS port definitions
+```
+
+### Electron Process Architecture
+- `main.js` - Main process: window management, IPC handlers, native file dialogs
+- `preload.js` - Context bridge exposing secure APIs to renderer
+- `index.html` - Renderer: loads Elm app, wires ports
+
+### Data Flow
+1. User opens file via menu (Cmd+O) or button
+2. Electron main process reads file, sends content via IPC
+3. JS bridges to Elm via `incoming` port
+4. `LogParser` decodes JSONL into `List LogEntry`
+5. User selects entry to view state before/after/diff
+
+### Log File Format (JSONL)
+
+Each line is a JSON object with entry types: `header`, `init`, `update`, `subscriptionChange`. Key fields in update entries:
+- `message` - The dispatched message with `name` and `payload`
+- `modelBefore`/`modelAfter` - State snapshots
+- `effects` - Commands produced by update
+
+See `log-format.md` for full specification.
+
+### View Options
+The state viewer uses two checkboxes to control the display:
+- **Show previous state** (default: on) - Shows before/after states side-by-side
+- **Highlight changes** (default: on) - Highlights changed values with color coding on the after panel
+
+## Test Data
+
+Test log files for manual testing are located in the `test-data/` directory.
+
+## Elm Conventions
+
+- Uses `elm-json-decode-pipeline` for decoder composition
+- Tree state managed separately for before/after panels
+- Search results stored as `TreePath` (list of string keys)
+- Filter mode shows only paths matching search query
+
+## Available Bash Tools
+
+The following CLI tools are available via bash and should be used when appropriate:
+
+- **jq** - JSON processor for parsing, filtering, and transforming JSON data
+- **rg** (ripgrep) - Fast regex-based file content search
+- **fd** - Fast file finder (alternative to `find`)

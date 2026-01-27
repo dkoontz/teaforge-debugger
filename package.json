@@ -1,0 +1,42 @@
+{
+  "name": "teaforge-debugger",
+  "version": "1.0.0",
+  "description": "A debugging utility for TeaForge-based applications. Reads and parses TeaForge log files to visualize state changes, messages, and effects.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:elm": "elm make src/Main.elm --output=dist/elm.js",
+    "build:css": "npx @tailwindcss/cli -i ./src/styles.css -o ./dist/styles.css",
+    "build": "npm run build:elm && npm run build:css",
+    "watch:elm": "elm-live src/Main.elm --output=dist/elm.js -- --debug",
+    "watch:css": "npx @tailwindcss/cli -i ./src/styles.css -o ./dist/styles.css --watch",
+    "agent:launch": "./scripts/electron-wrapper.sh",
+    "agent:quit": "./scripts/electron-quit.sh",
+    "agent:screenshot": "./scripts/browser-tools.sh screenshot",
+    "agent:click": "./scripts/browser-tools.sh click",
+    "agent:type": "./scripts/browser-tools.sh type",
+    "agent:wait-text": "./scripts/browser-tools.sh wait-text",
+    "agent:dump-dom": "./scripts/browser-tools.sh dump-dom",
+    "agent:list-selectors": "./scripts/browser-tools.sh list-selectors",
+    "agent:list-windows": "./scripts/browser-tools.sh list-windows"
+  },
+  "keywords": [
+    "teaforge",
+    "debugger",
+    "elm",
+    "electron",
+    "elm-architecture"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@tailwindcss/cli": "^4.1.18",
+    "@tailwindcss/postcss": "^4.1.18",
+    "daisyui": "^5.5.14",
+    "electron": "^32.0.0",
+    "electron-agent-tools": "^0.2.6",
+    "elm-live": "^4.0.2",
+    "tailwindcss": "^4.1.18"
+  }
+}

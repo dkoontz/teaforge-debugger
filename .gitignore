@@ -1,0 +1,11 @@
+# Elm
+elm-stuff
+node_modules
+dist
+
+# Testing
+e2e/temp
+
+# OS
+.DS_Store
+.e2e-artifacts/

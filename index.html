@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
+    <title>TeaForge Debugger</title>
+    <link rel="stylesheet" href="dist/styles.css">
+</head>
+<body class="h-screen overflow-hidden bg-base-100">
+    <!-- MCP control indicator border (shown when app is remotely controlled) -->
+    <div id="mcp-border" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 9999; border: 8px solid rgba(239, 68, 68, 0.5);"></div>
+
+    <!-- Elm application mount point -->
+    <div id="elm-app" class="h-full"></div>
+
+    <!-- Load compiled Elm application -->
+    <script src="dist/elm.js"></script>
+
+    <!-- Initialize Elm app and wire up ports -->
+    <script>
+        // Sidebar width persistence
+        const SIDEBAR_WIDTH_KEY = 'teaforge-sidebar-width';
+
+        function getSavedSidebarWidth() {
+            const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+            return saved ? parseInt(saved, 10) : 320;
+        }
+
+        // Initialize the Elm application with saved sidebar width
+        const app = Elm.Main.init({
+            node: document.getElementById('elm-app'),
+            flags: { sidebarWidth: getSavedSidebarWidth() }
+        });
+
+        // Wire up Elm outgoing port to Electron APIs
+        // The Elm app sends commands via the outgoing port, and we handle them here
+        if (app.ports && app.ports.outgoing) {
+            app.ports.outgoing.subscribe(async function(message) {
+                const { type, payload } = message;
+
+                try {
+                    switch (type) {
+                        case 'openFileDialog':
+                            const dialogResult = await window.electron.openFileDialog();
+                            sendToElm({
+                                type: 'fileDialogResult',
+                                payload: dialogResult
+                            });
+                            break;
+
+                        case 'readFile':
+                            const readResult = await window.electron.readFile(payload.path);
+                            sendToElm({
+                                type: 'fileReadResult',
+                                payload: {
+                                    path: payload.path,
+                                    ...readResult
+                                }
+                            });
+                            break;
+
+                        case 'listFiles':
+                            const listResult = await window.electron.listFiles(payload.path);
+                            sendToElm({
+                                type: 'fileListResult',
+                                payload: {
+                                    path: payload.path,
+                                    ...listResult
+                                }
+                            });
+                            break;
+
+                        case 'scrollIntoView':
+                            // Scroll the specified element into view (only if needed)
+                            const scrollElement = document.getElementById(payload.elementId);
+                            if (scrollElement) {
+                                scrollElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                            }
+                            break;
+
+                        case 'focusElement':
+                            // Focus the specified element by ID
+                            const focusEl = document.getElementById(payload.elementId);
+                            if (focusEl) {
+                                focusEl.focus();
+                            }
+                            break;
+
+                        case 'saveSidebarWidth':
+                            // Save sidebar width to localStorage
+                            localStorage.setItem(SIDEBAR_WIDTH_KEY, payload.width.toString());
+                            break;
+
+                        default:
+                            console.warn('Unknown port message type:', type);
+                    }
+                } catch (error) {
+                    console.error('Error handling port message:', error);
+                    sendToElm({
+                        type: 'error',
+                        payload: {
+                            originalType: type,
+                            error: error.message
+                        }
+                    });
+                }
+            });
+        }
+
+        // Helper function to send messages to Elm via the incoming port
+        function sendToElm(message) {
+            if (app.ports && app.ports.incoming) {
+                app.ports.incoming.send(message);
+            }
+        }
+
+        // Expose for E2E testing
+        window.app = app;
+        window.sendToElm = sendToElm;
+
+        // Listen for files opened via the File menu (Cmd+O)
+        if (window.electron.onFileOpened) {
+            window.electron.onFileOpened((data) => {
+                sendToElm({
+                    type: 'fileReadResult',
+                    payload: {
+                        success: true,
+                        content: data.content,
+                        path: data.filePath
+                    }
+                });
+            });
+        }
+
+        // Show MCP control indicator if app was launched via MCP
+        if (window.electron.isMcpControlled) {
+            window.electron.isMcpControlled().then((isControlled) => {
+                if (isControlled) {
+                    document.getElementById('mcp-border').classList.remove('hidden');
+                }
+            });
+        }
+    </script>
+</body>
+</html>

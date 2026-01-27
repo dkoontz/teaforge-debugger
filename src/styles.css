@@ -1,0 +1,153 @@
+@import 'tailwindcss';
+@plugin 'daisyui' {
+  themes: light --default, dark;
+}
+
+/* Custom base styles */
+@layer base {
+  html,
+  body {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-base-100 text-base-content;
+  }
+}
+
+/* Custom component styles */
+@layer components {
+  /* Tree view node styling */
+  .tree-node {
+    @apply py-0.5 px-2 rounded hover:bg-base-200 cursor-pointer;
+  }
+
+  .tree-node-expanded {
+    @apply font-medium;
+  }
+
+  .tree-node-collapsed {
+    @apply font-normal;
+  }
+
+  /* Tree view value styling */
+  .tree-value-string {
+    @apply text-success;
+  }
+
+  .tree-value-number {
+    @apply text-info;
+  }
+
+  .tree-value-boolean {
+    @apply text-warning;
+  }
+
+  .tree-value-null {
+    @apply text-base-content/50 italic;
+  }
+
+  /* Diff highlighting */
+  .diff-changed {
+    @apply bg-warning/20 border-l-2 border-warning;
+  }
+
+  .diff-added {
+    @apply bg-success/20 border-l-2 border-success;
+  }
+
+  .diff-removed {
+    @apply bg-error/20 border-l-2 border-error;
+  }
+
+  /* Search match highlighting */
+  .search-match {
+    @apply bg-primary/20 ring-2 ring-primary/50 rounded;
+  }
+
+  /* Current match: more prominent with thicker ring and offset */
+  .search-match-current {
+    @apply bg-primary/30 ring-[3px] ring-primary ring-offset-1 ring-offset-base-100 rounded;
+  }
+
+  /* When search highlighting combines with diff highlighting, preserve diff background and add ring */
+  .diff-changed.search-match {
+    @apply bg-warning/20 ring-2 ring-primary/70 rounded;
+  }
+
+  .diff-added.search-match {
+    @apply bg-success/20 ring-2 ring-primary/70 rounded;
+  }
+
+  .diff-removed.search-match {
+    @apply bg-error/20 ring-2 ring-primary/70 rounded;
+  }
+
+  /* Current match on diff-highlighted elements: thicker ring with offset for visibility */
+  .diff-changed.search-match-current {
+    @apply bg-warning/20 ring-[3px] ring-primary ring-offset-1 ring-offset-base-100 rounded;
+  }
+
+  .diff-added.search-match-current {
+    @apply bg-success/20 ring-[3px] ring-primary ring-offset-1 ring-offset-base-100 rounded;
+  }
+
+  .diff-removed.search-match-current {
+    @apply bg-error/20 ring-[3px] ring-primary ring-offset-1 ring-offset-base-100 rounded;
+  }
+
+  /* Message list item */
+  .message-item {
+    @apply py-2 px-3 cursor-pointer rounded-lg transition-colors;
+  }
+
+  .message-item:hover {
+    @apply bg-base-200;
+  }
+
+  .message-item-selected {
+    @apply bg-primary/10 text-primary;
+  }
+
+  /* Split.js resize handle styling */
+  .gutter {
+    @apply bg-base-300 transition-colors duration-150;
+  }
+
+  .gutter:hover {
+    @apply bg-primary/40;
+  }
+
+  .gutter:active {
+    @apply bg-primary/60;
+  }
+
+  .gutter.gutter-horizontal {
+    @apply cursor-col-resize;
+    width: 6px;
+  }
+
+  .gutter.gutter-vertical {
+    @apply cursor-row-resize;
+  }
+}
+
+/* Custom utility styles */
+@layer utilities {
+  /* Scrollbar styling */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    @apply w-2;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-base-200 rounded;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-base-300 rounded hover:bg-base-content/30;
+  }
+}

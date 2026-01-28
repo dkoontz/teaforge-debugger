@@ -38,5 +38,8 @@
     "electron-agent-tools": "^0.2.6",
     "elm-live": "^4.0.2",
     "tailwindcss": "^4.1.18"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-free": "^7.1.0"
   }
 }

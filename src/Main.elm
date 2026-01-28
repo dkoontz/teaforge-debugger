@@ -1099,7 +1099,16 @@ update msg model =
 
         -- Error Handling
         DismissError ->
-            ( { model | errorMessage = Nothing }
+            ( { model
+                | errorMessage = Nothing
+                , loadingState =
+                    case model.loadingState of
+                        Error _ ->
+                            Idle
+
+                        other ->
+                            other
+              }
             , Cmd.none
             )
 
@@ -1359,25 +1368,71 @@ DaisyUI components are used for:
 -}
 view : Model -> Html Msg
 view model =
-    div [ class "flex h-full w-full" ]
-        [ -- Sidebar panel with controlled width
-          div
-            [ class "flex flex-col h-full overflow-hidden bg-base-200"
-            , style "width" (String.fromInt model.sidebarWidth ++ "px")
-            , style "flex-shrink" "0"
-            ]
-            [ viewSidebar model ]
+    div [ class "h-full w-full" ]
+        [ -- Main layout
+          div [ class "flex h-full w-full" ]
+            [ -- Sidebar panel with controlled width
+              div
+                [ class "flex flex-col h-full overflow-hidden bg-base-200"
+                , style "width" (String.fromInt model.sidebarWidth ++ "px")
+                , style "flex-shrink" "0"
+                ]
+                [ viewSidebar model ]
 
-        -- Resize gutter
-        , viewResizeGutter model
+            -- Resize gutter
+            , viewResizeGutter model
 
-        -- Main content panel fills remaining space
-        , div
-            [ class "flex flex-col h-full overflow-hidden flex-1"
+            -- Main content panel fills remaining space
+            , div
+                [ class "flex flex-col h-full overflow-hidden flex-1"
+                ]
+                [ viewMainContent model
+                ]
             ]
-            [ viewMainContent model
-            ]
+
+        -- Error toast (rendered last to ensure it's on top)
+        , viewErrorBanner model
         ]
+
+
+{-| Render a dismissible error toast at the top of the screen.
+
+Shows errors from either loadingState or errorMessage.
+Uses DaisyUI's toast component for positioning.
+
+-}
+viewErrorBanner : Model -> Html Msg
+viewErrorBanner model =
+    let
+        errorText =
+            case model.loadingState of
+                Error msg ->
+                    Just msg
+
+                _ ->
+                    model.errorMessage
+    in
+    case errorText of
+        Just msg ->
+            div
+                [ class "fixed top-4 left-1/2 -translate-x-1/2 z-[10000]" ]
+                [ div
+                    [ class "alert alert-error flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg bg-error text-error-content"
+                    , attribute "role" "alert"
+                    ]
+                    [ i [ class "fa-solid fa-triangle-exclamation text-lg" ] []
+                    , span [] [ text msg ]
+                    , button
+                        [ class "btn btn-sm btn-ghost"
+                        , onClick DismissError
+                        , title "Dismiss"
+                        ]
+                        [ text "✕" ]
+                    ]
+                ]
+
+        Nothing ->
+            text ""
 
 
 {-| Render the resize gutter between sidebar and content.

@@ -58,7 +58,7 @@ ipcMain.handle('open-file-dialog', async () => {
         const result = await dialog.showOpenDialog(mainWindow, {
             properties: ['openFile'],
             filters: [
-                { name: 'TeaForge Logs', extensions: ['log', 'json'] },
+                { name: 'TeaForge Logs', extensions: ['log', 'jsonl', 'json'] },
                 { name: 'All Files', extensions: ['*'] }
             ]
         });
@@ -186,12 +186,20 @@ const isMcpControlled = process.argv.includes('--mcp-controlled');
 const openFileArg = process.argv.find(arg => arg.startsWith('--open-file='));
 const autoOpenFile = openFileArg ? openFileArg.substring('--open-file='.length) : null;
 
+// Handle --dev-tools flag to open DevTools on startup
+const openDevTools = process.argv.includes('--dev-tools');
+
 // IPC Handler: Check if app is MCP-controlled
 ipcMain.handle('is-mcp-controlled', () => isMcpControlled);
 
 app.whenReady().then(() => {
     createMenu();
     createWindow();
+
+    // Open DevTools if --dev-tools flag is present
+    if (openDevTools) {
+        mainWindow.webContents.openDevTools();
+    }
 
     // If running in test mode, quit after window is ready
     if (isTestLaunch) {

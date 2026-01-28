@@ -143,63 +143,36 @@ viewItem selectedIndex onSelect index entry =
         ]
 
 
-{-| Format a Unix timestamp for display.
+{-| Format a Unix timestamp (milliseconds since epoch) for display.
 
-Converts the timestamp to a human-readable format showing time.
-For now, displays the raw timestamp value. This will be enhanced
-in a later phase to show formatted date/time.
+Converts the timestamp to a human-readable time format with millisecond precision.
 
 -}
 formatTimestamp : Int -> String
 formatTimestamp timestamp =
-    -- Format as time string if timestamp looks like milliseconds
-    -- Otherwise just show the raw value
-    if timestamp > 1000000000000 then
-        -- Likely milliseconds since epoch, show simplified time
-        let
-            -- Extract hours, minutes, seconds from milliseconds
-            totalSeconds =
-                timestamp // 1000
+    let
+        milliseconds =
+            modBy 1000 timestamp
 
-            seconds =
-                modBy 60 totalSeconds
+        totalSeconds =
+            timestamp // 1000
 
-            totalMinutes =
-                totalSeconds // 60
+        seconds =
+            modBy 60 totalSeconds
 
-            minutes =
-                modBy 60 totalMinutes
+        totalMinutes =
+            totalSeconds // 60
 
-            hours =
-                modBy 24 (totalMinutes // 60)
-        in
-        String.padLeft 2 '0' (String.fromInt hours)
-            ++ ":"
-            ++ String.padLeft 2 '0' (String.fromInt minutes)
-            ++ ":"
-            ++ String.padLeft 2 '0' (String.fromInt seconds)
+        minutes =
+            modBy 60 totalMinutes
 
-    else if timestamp > 1000000000 then
-        -- Likely seconds since epoch
-        let
-            totalMinutes =
-                timestamp // 60
-
-            seconds =
-                modBy 60 timestamp
-
-            minutes =
-                modBy 60 totalMinutes
-
-            hours =
-                modBy 24 (totalMinutes // 60)
-        in
-        String.padLeft 2 '0' (String.fromInt hours)
-            ++ ":"
-            ++ String.padLeft 2 '0' (String.fromInt minutes)
-            ++ ":"
-            ++ String.padLeft 2 '0' (String.fromInt seconds)
-
-    else
-        -- Small number, might be sequence number or relative time
-        "#" ++ String.fromInt timestamp
+        hours =
+            modBy 24 (totalMinutes // 60)
+    in
+    String.padLeft 2 '0' (String.fromInt hours)
+        ++ ":"
+        ++ String.padLeft 2 '0' (String.fromInt minutes)
+        ++ ":"
+        ++ String.padLeft 2 '0' (String.fromInt seconds)
+        ++ "."
+        ++ String.padLeft 3 '0' (String.fromInt milliseconds)

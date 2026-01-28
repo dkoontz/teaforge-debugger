@@ -88,6 +88,26 @@ The app supports these command-line flags:
 - **Frontend**: Elm 0.19.1 compiled to JS
 - **Desktop**: Electron with secure IPC
 - **Styling**: Tailwind CSS 4 + DaisyUI 5 (configured in `src/styles.css` via `@plugin`)
+- **Icons**: FontAwesome 7 (installed locally via npm as `@fortawesome/fontawesome-free`)
+
+### UI Components
+
+**DaisyUI**: Always prefer DaisyUI components when available. DaisyUI provides pre-styled components built on Tailwind CSS that maintain consistent theming. Common components used:
+- `alert` - For error/warning/info messages
+- `toast` - For floating notifications (use with `toast-top toast-center` for centered top positioning)
+- `btn` - For buttons
+- `collapse` - For expandable sections
+
+See https://daisyui.com/components/ for the full component list.
+
+**FontAwesome**: Use FontAwesome icons via the `<i>` element with appropriate classes:
+- Solid icons: `fa-solid fa-icon-name` (e.g., `fa-solid fa-triangle-exclamation`)
+- Regular icons: `fa-regular fa-icon-name`
+- Brand icons: `fa-brands fa-icon-name`
+
+In Elm, render icons as: `i [ class "fa-solid fa-icon-name" ] []`
+
+**Styling**: Always use Tailwind utility classes or DaisyUI component classes for styling. Avoid inline styles (`style "property" "value"` in Elm) except as a last resort when no Tailwind/DaisyUI equivalent exists. This keeps styling consistent and maintainable.
 
 ### Elm Module Structure
 

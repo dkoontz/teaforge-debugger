@@ -96,8 +96,8 @@ parseLogFile content =
     if String.trim content == "" then
         Err EmptyFile
 
-    else if String.startsWith "{\"entryType\"" (String.trim content) || String.startsWith "{\"entryType\"" content then
-        -- JSONL format with entryType field
+    else if isJsonlFormat content then
+        -- JSONL format with type field
         parseJsonlFormat content
 
     else
@@ -114,6 +114,17 @@ parseLogFile content =
                     Err _ ->
                         -- Last resort: try JSONL anyway
                         parseJsonlFormat content
+
+
+{-| Check if content appears to be JSONL format.
+-}
+isJsonlFormat : String -> Bool
+isJsonlFormat content =
+    let
+        trimmed =
+            String.trim content
+    in
+    String.startsWith "{\"type\"" trimmed
 
 
 {-| Parse JSONL format (one JSON object per line).
@@ -220,10 +231,13 @@ convertRawEntriesToLogEntries rawEntries =
 
 
 {-| Decoder for a raw JSONL entry.
+
+Decodes the "type" field to determine entry type per the tea-debug-log schema.
+
 -}
 rawEntryDecoder : D.Decoder RawEntry
 rawEntryDecoder =
-    D.field "entryType" D.string
+    D.field "type" D.string
         |> D.andThen
             (\entryType ->
                 case entryType of
@@ -287,28 +301,23 @@ updateEntryDecoder =
 {-| Decoder for message data in new format.
 
 The new format uses `_type` for the message type name.
-If there's an `_unwrapped` field, that contains the inner message.
+If there's an `_unwrapped` or `_inner` field, that contains the inner message.
 
 -}
 newMessageDataDecoder : D.Decoder MessageData
 newMessageDataDecoder =
     D.oneOf
-        [ -- New format with _type and possibly _unwrapped
+        [ -- New format with _type and possibly _unwrapped/_inner
           D.andThen
             (\typeStr ->
                 D.oneOf
                     [ -- Has _unwrapped - use the unwrapped message type
                       D.field "_unwrapped" D.value
-                        |> D.andThen
-                            (\unwrapped ->
-                                case D.decodeValue (D.field "_type" D.string) unwrapped of
-                                    Ok innerType ->
-                                        D.succeed { name = innerType, payload = unwrapped }
-
-                                    Err _ ->
-                                        D.succeed { name = typeStr, payload = unwrapped }
-                            )
-                    , -- No _unwrapped - use the whole message as payload
+                        |> D.andThen (decodeInnerMessage typeStr)
+                    , -- Has _inner - use the inner message type
+                      D.field "_inner" D.value
+                        |> D.andThen (decodeInnerMessage typeStr)
+                    , -- No _unwrapped/_inner - use the whole message as payload
                       D.value
                         |> D.map (\v -> { name = typeStr, payload = v })
                     ]
@@ -317,6 +326,18 @@ newMessageDataDecoder =
         , -- Legacy format fallback
           messageDataDecoder
         ]
+
+
+{-| Decode inner message, extracting its type name if available.
+-}
+decodeInnerMessage : String -> D.Value -> D.Decoder MessageData
+decodeInnerMessage fallbackType inner =
+    case D.decodeValue (D.field "_type" D.string) inner of
+        Ok innerType ->
+            D.succeed { name = innerType, payload = inner }
+
+        Err _ ->
+            D.succeed { name = fallbackType, payload = inner }
 
 
 {-| Parse a single log entry from a JSON Value.

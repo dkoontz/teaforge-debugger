@@ -18,7 +18,8 @@
     "agent:wait-text": "./scripts/browser-tools.sh wait-text",
     "agent:dump-dom": "./scripts/browser-tools.sh dump-dom",
     "agent:list-selectors": "./scripts/browser-tools.sh list-selectors",
-    "agent:list-windows": "./scripts/browser-tools.sh list-windows"
+    "agent:list-windows": "./scripts/browser-tools.sh list-windows",
+    "agent:open-file": "./scripts/browser-tools.sh open-file"
   },
   "keywords": [
     "teaforge",

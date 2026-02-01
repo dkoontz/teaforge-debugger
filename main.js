@@ -4,6 +4,50 @@ const fs = require('fs');
 
 let mainWindow;
 
+// Maximum file size (500 MB) - V8 has a ~512MB string limit
+const MAX_FILE_SIZE = 500 * 1024 * 1024;
+
+/**
+ * Read a file with size checking and user-friendly error messages.
+ * @param {string} filePath - Path to the file to read
+ * @returns {{ success: boolean, content?: string, error?: string }}
+ */
+function readFileWithSizeCheck(filePath) {
+    const absolutePath = path.resolve(filePath);
+
+    // Check file exists and get size
+    let stats;
+    try {
+        stats = fs.statSync(absolutePath);
+    } catch (err) {
+        return { success: false, error: `File not found: ${absolutePath}` };
+    }
+
+    // Check file size
+    const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(1);
+    if (stats.size > MAX_FILE_SIZE) {
+        return {
+            success: false,
+            error: `File too large: ${fileSizeMB} MB exceeds the 500 MB limit. Consider splitting the log file into smaller chunks.`
+        };
+    }
+
+    // Read file content
+    try {
+        const content = fs.readFileSync(absolutePath, 'utf8');
+        return { success: true, content };
+    } catch (err) {
+        // Check for V8 string length error
+        if (err.message && err.message.includes('string longer than')) {
+            return {
+                success: false,
+                error: `File too large: ${fileSizeMB} MB exceeds JavaScript's string size limit. Consider splitting the log file into smaller chunks.`
+            };
+        }
+        return { success: false, error: `Failed to read file: ${err.message}` };
+    }
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1400,
@@ -26,13 +70,7 @@ function createWindow() {
 
 // IPC Handler: Read file contents
 ipcMain.handle('read-file', async (event, filePath) => {
-    try {
-        const absolutePath = path.resolve(filePath);
-        const content = fs.readFileSync(absolutePath, 'utf8');
-        return { success: true, content };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
+    return readFileWithSizeCheck(filePath);
 });
 
 // IPC Handler: List files in directory
@@ -68,8 +106,12 @@ ipcMain.handle('open-file-dialog', async () => {
         }
 
         const filePath = result.filePaths[0];
-        const content = fs.readFileSync(filePath, 'utf8');
-        return { success: true, canceled: false, filePath, content };
+        const readResult = readFileWithSizeCheck(filePath);
+        if (readResult.success) {
+            return { success: true, canceled: false, filePath, content: readResult.content };
+        } else {
+            return { success: false, error: readResult.error };
+        }
     } catch (error) {
         return { success: false, error: error.message };
     }
@@ -114,11 +156,11 @@ function createMenu() {
 
                             if (!result.canceled && result.filePaths.length > 0) {
                                 const filePath = result.filePaths[0];
-                                try {
-                                    const content = fs.readFileSync(filePath, 'utf8');
-                                    mainWindow.webContents.send('file-opened', { filePath, content });
-                                } catch (error) {
-                                    dialog.showErrorBox('Error', `Failed to open file: ${error.message}`);
+                                const readResult = readFileWithSizeCheck(filePath);
+                                if (readResult.success) {
+                                    mainWindow.webContents.send('file-opened', { filePath, content: readResult.content });
+                                } else {
+                                    dialog.showErrorBox('Error', readResult.error);
                                 }
                             }
                         }
@@ -216,12 +258,14 @@ app.whenReady().then(() => {
         mainWindow.webContents.on('did-finish-load', () => {
             // Small delay to ensure Elm app initializes
             setTimeout(() => {
-                try {
-                    const filePath = path.resolve(autoOpenFile);
-                    const content = fs.readFileSync(filePath, 'utf8');
-                    mainWindow.webContents.send('file-opened', { filePath, content });
-                } catch (error) {
-                    console.error(`Failed to auto-open file: ${error.message}`);
+                const filePath = path.resolve(autoOpenFile);
+                const readResult = readFileWithSizeCheck(filePath);
+                if (readResult.success) {
+                    mainWindow.webContents.send('file-opened', { filePath, content: readResult.content });
+                } else {
+                    console.error(`Failed to auto-open file: ${readResult.error}`);
+                    // Send error to Elm app so it can display it
+                    mainWindow.webContents.send('file-opened', { filePath, error: readResult.error });
                 }
             }, 100);
         });

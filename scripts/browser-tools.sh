@@ -10,6 +10,7 @@
 #   ./scripts/browser-tools.sh dump-dom
 #   ./scripts/browser-tools.sh list-selectors [max]
 #   ./scripts/browser-tools.sh list-windows
+#   ./scripts/browser-tools.sh open-file /path/to/file.jsonl
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(dirname "$SCRIPT_DIR")"
@@ -71,9 +72,17 @@ case "$COMMAND" in
     list-windows)
         exec node "$BROWSER_TOOLS" list-windows "{\"wsUrl\": \"$WS_URL\"}"
         ;;
+    open-file)
+        FILE_ARG="$1"
+        if [ -z "$FILE_ARG" ]; then
+            echo "Error: open-file requires file path argument" >&2
+            exit 1
+        fi
+        exec node "$SCRIPT_DIR/open-file.js" "$FILE_ARG"
+        ;;
     *)
         echo "Unknown command: $COMMAND" >&2
-        echo "Available commands: screenshot, click, type, wait-text, dump-dom, list-selectors, list-windows" >&2
+        echo "Available commands: screenshot, click, type, wait-text, dump-dom, list-selectors, list-windows, open-file" >&2
         exit 1
         ;;
 esac

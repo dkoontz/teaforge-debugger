@@ -18,7 +18,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Json.Decode as D
 import Json.Encode as E
-import LogParser exposing (ParseError(..), parseLogFile)
+import LogParser exposing (MalformedEntryInfo, ParseError(..), parseLogFile)
 import MessageList
 import Ports
 import Search
@@ -1255,14 +1255,36 @@ handleErrorResult value model =
 parseErrorToString : ParseError -> String
 parseErrorToString error =
     case error of
+        EmptyFile ->
+            "The file is empty"
+
+        MalformedEntry info ->
+            "Line "
+                ++ String.fromInt info.lineNumber
+                ++ ": "
+                ++ info.reason
+                ++ " — \""
+                ++ info.preview
+                ++ "\""
+
+        NoValidEntries info ->
+            case info.firstError of
+                Just firstErr ->
+                    "No valid log entries found ("
+                        ++ String.fromInt info.malformedCount
+                        ++ " malformed). First error at line "
+                        ++ String.fromInt firstErr.lineNumber
+                        ++ ": "
+                        ++ firstErr.reason
+
+                Nothing ->
+                    "No valid log entries found in file"
+
         InvalidJson jsonError ->
             "Invalid JSON format: " ++ jsonError
 
         UnexpectedFormat message ->
             "Unexpected file format: " ++ message
-
-        EmptyFile ->
-            "The file is empty"
 
 
 {-| Get the path of the current search match for highlighting in tree views.

@@ -3,6 +3,7 @@ module LogParser exposing
     , parseLogEntry
     , ParseResult
     , ParseError(..)
+    , MalformedEntryInfo
     , logEntryDecoder
     , messageDataDecoder
     , effectDecoder
@@ -51,9 +52,24 @@ type alias ParseResult a =
 {-| Errors that can occur during parsing.
 -}
 type ParseError
-    = InvalidJson String
+    = EmptyFile
+    | MalformedEntry
+        { lineNumber : Int
+        , preview : String
+        , reason : String
+        }
+    | NoValidEntries { malformedCount : Int, firstError : Maybe MalformedEntryInfo }
+    | InvalidJson String
     | UnexpectedFormat String
-    | EmptyFile
+
+
+{-| Information about a malformed entry for error reporting.
+-}
+type alias MalformedEntryInfo =
+    { lineNumber : Int
+    , preview : String
+    , reason : String
+    }
 
 
 {-| Internal representation of a raw JSONL entry before processing.
@@ -135,53 +151,125 @@ parseJsonlFormat content =
         lines =
             content
                 |> String.lines
-                |> List.filter (not << String.isEmpty << String.trim)
-
-        ( rawEntries, skippedCount ) =
-            parseRawEntries lines
-
-        logEntries =
-            convertRawEntriesToLogEntries rawEntries
+                |> List.indexedMap (\i line -> ( i + 1, line ))
+                |> List.filter (\( _, line ) -> not (String.isEmpty (String.trim line)))
     in
-    -- If we couldn't parse any lines and all were skipped, return an error
-    if List.isEmpty logEntries && skippedCount == List.length lines && skippedCount > 0 then
-        Err (InvalidJson "No valid JSONL entries found")
+    if List.isEmpty lines then
+        Err EmptyFile
 
     else
-        Ok ( logEntries, skippedCount )
+        let
+            parseResult =
+                parseRawEntriesWithLineNumbers lines
+
+            logEntries =
+                convertRawEntriesToLogEntries parseResult.entries
+        in
+        if List.isEmpty logEntries && not (List.isEmpty parseResult.errors) then
+            -- No valid entries found, report first error
+            Err
+                (NoValidEntries
+                    { malformedCount = List.length parseResult.errors
+                    , firstError = List.head parseResult.errors
+                    }
+                )
+
+        else if List.isEmpty logEntries then
+            -- No entries at all (file only had headers/subscriptionChanges)
+            Err
+                (NoValidEntries
+                    { malformedCount = 0
+                    , firstError = Nothing
+                    }
+                )
+
+        else
+            Ok ( logEntries, List.length parseResult.errors )
 
 
-{-| Parse each line into a RawEntry, counting failures.
+{-| Result of parsing raw entries with error tracking.
 -}
-parseRawEntries : List String -> ( List RawEntry, Int )
-parseRawEntries lines =
+type alias ParseEntriesResult =
+    { entries : List RawEntry
+    , errors : List MalformedEntryInfo
+    }
+
+
+{-| Parse each line into a RawEntry, tracking line numbers and collecting errors.
+-}
+parseRawEntriesWithLineNumbers : List ( Int, String ) -> ParseEntriesResult
+parseRawEntriesWithLineNumbers numberedLines =
     let
-        results =
-            List.map parseRawEntry lines
+        processLine ( lineNum, line ) acc =
+            case parseRawEntryWithError lineNum line of
+                Ok entry ->
+                    { acc | entries = entry :: acc.entries }
 
-        entries =
-            List.filterMap identity results
-
-        -- Count actual failures (not including intentionally skipped entries)
-        actualEntries =
-            List.filter ((/=) SkippedEntry) entries
-
-        failureCount =
-            List.length lines - List.length results + List.length (List.filter ((==) Nothing) (List.map Just results))
+                Err errorInfo ->
+                    { acc | errors = errorInfo :: acc.errors }
     in
-    ( entries, List.length lines - List.length entries )
+    List.foldl processLine { entries = [], errors = [] } numberedLines
+        |> (\result ->
+                { entries = List.reverse result.entries
+                , errors = List.reverse result.errors
+                }
+           )
 
 
-{-| Parse a single line into a RawEntry.
+{-| Parse a single line into a RawEntry, returning detailed error on failure.
 -}
-parseRawEntry : String -> Maybe RawEntry
-parseRawEntry line =
-    case D.decodeString rawEntryDecoder (String.trim line) of
+parseRawEntryWithError : Int -> String -> Result MalformedEntryInfo RawEntry
+parseRawEntryWithError lineNum line =
+    let
+        trimmed =
+            String.trim line
+    in
+    case D.decodeString rawEntryDecoder trimmed of
         Ok entry ->
-            Just entry
+            Ok entry
 
-        Err _ ->
-            Nothing
+        Err decodeErr ->
+            Err
+                { lineNumber = lineNum
+                , preview = truncatePreview trimmed
+                , reason = decodeErrorToReason decodeErr
+                }
+
+
+{-| Convert a JSON decode error to a human-readable reason.
+-}
+decodeErrorToReason : D.Error -> String
+decodeErrorToReason error =
+    case error of
+        D.Field field subError ->
+            "Missing or invalid field '" ++ field ++ "'"
+
+        D.Index idx subError ->
+            "Error at index " ++ String.fromInt idx
+
+        D.OneOf errors ->
+            "No valid format matched"
+
+        D.Failure message _ ->
+            message
+
+
+{-| Truncate a line to create a preview for error messages.
+-}
+truncatePreview : String -> String
+truncatePreview line =
+    let
+        maxLen =
+            30
+
+        trimmed =
+            String.trim line
+    in
+    if String.length trimmed <= maxLen then
+        trimmed
+
+    else
+        String.left maxLen trimmed ++ "..."
 
 
 {-| Convert raw entries to LogEntries, reconstructing modelBefore from previous entry.

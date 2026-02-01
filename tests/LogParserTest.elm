@@ -74,14 +74,19 @@ suite =
 
                         Err _ ->
                             Expect.fail "Expected successful parse with skipped entries"
-            , test "returns InvalidJson for completely invalid JSON" <|
+            , test "returns NoValidEntries for completely invalid content" <|
                 \_ ->
                     case parseLogFile "not json at all" of
-                        Err (InvalidJson _) ->
-                            Expect.pass
+                        Err (NoValidEntries info) ->
+                            case info.firstError of
+                                Just firstErr ->
+                                    Expect.equal firstErr.lineNumber 1
+
+                                Nothing ->
+                                    Expect.fail "Expected firstError to be set"
 
                         _ ->
-                            Expect.fail "Expected InvalidJson error"
+                            Expect.fail "Expected NoValidEntries error"
             , test "parses multiple valid entries" <|
                 \_ ->
                     let

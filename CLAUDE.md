@@ -36,20 +36,17 @@ The project uses `electron-agent-tools` for Playwright-based browser automation 
 ### npm Scripts
 
 ```bash
-# Launch the app (with default test file)
+# Launch the app
 npm run agent:launch
 
 # Launch and wait 3 seconds before returning
 npm run agent:launch -- 3
 
-# Launch with custom log file
-LOG_FILE=/path/to/file.log npm run agent:launch
-
-# Launch without auto-opening a file
-LOG_FILE="" npm run agent:launch
-
 # Quit the app
 npm run agent:quit
+
+# Open a log file in the running app
+npm run agent:open-file /path/to/file.jsonl
 
 # Take screenshot
 npm run agent:screenshot /tmp/screenshot.png

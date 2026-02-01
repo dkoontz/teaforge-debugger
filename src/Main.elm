@@ -12,6 +12,7 @@ import Array exposing (Array)
 import Browser
 import Browser.Dom as Dom
 import Browser.Events
+import CompressionDict exposing (Compression)
 import Dict exposing (Dict)
 import Diff
 import Html exposing (..)
@@ -188,6 +189,7 @@ type alias Model =
     , changedPaths : List TreePath
     , changes : Dict String Diff.Change
     , messageViewStates : Dict Int MessageViewState
+    , compression : Compression
     }
 
 
@@ -243,6 +245,7 @@ init flagsValue =
       , changedPaths = []
       , changes = Dict.empty
       , messageViewStates = Dict.empty
+      , compression = CompressionDict.empty
       }
     , Cmd.none
     )
@@ -363,6 +366,7 @@ update msg model =
                 , messageViewStates = Dict.empty
                 , changedPaths = []
                 , changes = Dict.empty
+                , compression = CompressionDict.empty
               }
             , Ports.openInput path
             )
@@ -950,11 +954,28 @@ processValidEntry : Int -> D.Value -> Model -> ( Model, Cmd Msg )
 processValidEntry lineNum rawValue model =
     case D.decodeValue LogParser.entryTypeDecoder rawValue of
         Ok "header" ->
-            -- Skip header entries
-            ( model, Cmd.none )
+            -- Handle header entries to detect compression
+            case D.decodeValue LogParser.headerDecoder rawValue of
+                Ok headerData ->
+                    if headerData.compression == Just "stringDict" then
+                        ( { model | compression = CompressionDict.Enabled Dict.empty }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        Ok "stringDict" ->
+            -- Merge string dictionary entries into compression state
+            ( { model | compression = CompressionDict.merge rawValue model.compression }
+            , Cmd.none
+            )
 
         Ok "init" ->
-            case D.decodeValue LogParser.initDataDecoder rawValue of
+            case D.decodeValue (LogParser.initDataDecoder model.compression) rawValue of
                 Ok initData ->
                     let
                         entry =
@@ -978,7 +999,7 @@ processValidEntry lineNum rawValue model =
                     addErrorEntry lineNum (D.errorToString e) model
 
         Ok "update" ->
-            case D.decodeValue LogParser.updateDataDecoder rawValue of
+            case D.decodeValue (LogParser.updateDataDecoder model.compression) rawValue of
                 Ok updateData ->
                     let
                         entry =
@@ -1004,7 +1025,7 @@ processValidEntry lineNum rawValue model =
                     addErrorEntry lineNum (D.errorToString e) model
 
         Ok "subscriptionChange" ->
-            case D.decodeValue LogParser.subscriptionChangeDataDecoder rawValue of
+            case D.decodeValue (LogParser.subscriptionChangeDataDecoder model.compression) rawValue of
                 Ok subData ->
                     let
                         entry =

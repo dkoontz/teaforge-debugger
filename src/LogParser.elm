@@ -5,6 +5,8 @@ module LogParser exposing
     , subscriptionChangeDataDecoder
     , messageDataDecoder
     , effectDecoder
+    , headerDecoder
+    , HeaderData
     )
 
 {-| TeaForge log entry decoders.
@@ -29,6 +31,7 @@ from a streaming input source. Each entry is decoded based on its "type" field.
 
 -}
 
+import CompressionDict exposing (Compression)
 import Json.Decode as D
 import Json.Encode as E
 import Types exposing (Effect, MessageData)
@@ -62,6 +65,14 @@ type alias SubscriptionChangeData =
     }
 
 
+{-| Data from a header entry.
+-}
+type alias HeaderData =
+    { version : Int
+    , compression : Maybe String
+    }
+
+
 {-| Decoder for the entry type field.
 -}
 entryTypeDecoder : D.Decoder String
@@ -69,10 +80,48 @@ entryTypeDecoder =
     D.field "type" D.string
 
 
-{-| Decoder for init entry data.
+{-| Decoder for header entry data.
 -}
-initDataDecoder : D.Decoder InitData
-initDataDecoder =
+headerDecoder : D.Decoder HeaderData
+headerDecoder =
+    D.map2
+        (\version compression ->
+            { version = version
+            , compression = compression
+            }
+        )
+        (D.oneOf [ D.field "version" D.int, D.succeed 1 ])
+        (D.oneOf [ D.field "compression" (D.map Just D.string), D.succeed Nothing ])
+
+
+{-| Decoder for init entry data.
+
+The decoder first decompresses the raw JSON value (to handle compressed keys like @0 for "_type"),
+then decodes from the decompressed value.
+
+-}
+initDataDecoder : Compression -> D.Decoder InitData
+initDataDecoder compression =
+    D.value
+        |> D.andThen
+            (\rawValue ->
+                let
+                    decompressed =
+                        CompressionDict.decompressValue compression rawValue
+                in
+                case D.decodeValue initDataDecoderInternal decompressed of
+                    Ok data ->
+                        D.succeed data
+
+                    Err e ->
+                        D.fail (D.errorToString e)
+            )
+
+
+{-| Internal decoder for init data (operates on already-decompressed JSON).
+-}
+initDataDecoderInternal : D.Decoder InitData
+initDataDecoderInternal =
     D.map3
         (\ts model effs ->
             { timestamp = ts
@@ -86,9 +135,33 @@ initDataDecoder =
 
 
 {-| Decoder for update entry data.
+
+The decoder first decompresses the raw JSON value (to handle compressed keys like @0 for "_type"),
+then decodes from the decompressed value.
+
 -}
-updateDataDecoder : D.Decoder UpdateData
-updateDataDecoder =
+updateDataDecoder : Compression -> D.Decoder UpdateData
+updateDataDecoder compression =
+    D.value
+        |> D.andThen
+            (\rawValue ->
+                let
+                    decompressed =
+                        CompressionDict.decompressValue compression rawValue
+                in
+                case D.decodeValue updateDataDecoderInternal decompressed of
+                    Ok data ->
+                        D.succeed data
+
+                    Err e ->
+                        D.fail (D.errorToString e)
+            )
+
+
+{-| Internal decoder for update data (operates on already-decompressed JSON).
+-}
+updateDataDecoderInternal : D.Decoder UpdateData
+updateDataDecoderInternal =
     D.map4
         (\ts msg model effs ->
             { timestamp = ts
@@ -104,9 +177,33 @@ updateDataDecoder =
 
 
 {-| Decoder for subscription change entry data.
+
+The decoder first decompresses the raw JSON value (to handle compressed keys),
+then decodes from the decompressed value.
+
 -}
-subscriptionChangeDataDecoder : D.Decoder SubscriptionChangeData
-subscriptionChangeDataDecoder =
+subscriptionChangeDataDecoder : Compression -> D.Decoder SubscriptionChangeData
+subscriptionChangeDataDecoder compression =
+    D.value
+        |> D.andThen
+            (\rawValue ->
+                let
+                    decompressed =
+                        CompressionDict.decompressValue compression rawValue
+                in
+                case D.decodeValue subscriptionChangeDataDecoderInternal decompressed of
+                    Ok data ->
+                        D.succeed data
+
+                    Err e ->
+                        D.fail (D.errorToString e)
+            )
+
+
+{-| Internal decoder for subscription change data (operates on already-decompressed JSON).
+-}
+subscriptionChangeDataDecoderInternal : D.Decoder SubscriptionChangeData
+subscriptionChangeDataDecoderInternal =
     D.map3
         (\ts start stop ->
             { timestamp = ts
@@ -123,6 +220,8 @@ subscriptionChangeDataDecoder =
 
 The new format uses `_type` for the message type name.
 If there's an `_unwrapped` or `_inner` field, that contains the inner message.
+
+Note: Decompression happens at the entry level before this decoder runs.
 
 -}
 newMessageDataDecoder : D.Decoder MessageData
@@ -202,6 +301,8 @@ messageDataDecoder =
 {-| Decoder for an effect (command).
 
 Handles both new and legacy formats.
+
+Note: Decompression happens at the entry level before this decoder runs.
 
 -}
 effectDecoder : D.Decoder Effect

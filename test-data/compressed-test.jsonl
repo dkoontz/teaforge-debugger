@@ -1,0 +1,6 @@
+{"type": "header", "version": 1, "compression": "stringDict"}
+{"type": "stringDict", "strings": {"0": "model", "1": "counter", "2": "Message.Increment", "3": "Message.Decrement", "4": "value"}}
+{"type": "init", "timestamp": 1000, "model": {"@0": {"@1": 0}}, "effects": []}
+{"type": "update", "timestamp": 1001, "message": {"_type": "@2"}, "model": {"@0": {"@1": 1}}, "effects": []}
+{"type": "update", "timestamp": 1002, "message": {"_type": "@2"}, "model": {"@0": {"@1": 2}}, "effects": []}
+{"type": "update", "timestamp": 1003, "message": {"_type": "@3"}, "model": {"@0": {"@1": 1}}, "effects": []}

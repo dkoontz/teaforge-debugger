@@ -1,0 +1,5 @@
+{"type": "header", "version": 1}
+{"type": "init", "timestamp": 1000, "model": {"counter": 0}, "effects": []}
+{"type": "update", "timestamp": 1001, "message": {"_type": "Increment"}, "model": {"counter": 1}, "effects": []}
+{"type": "update", "timestamp": 1002, "message": {"_type": "Increment"}, "model": {"counter": 2}, "effects": []}
+{"type": "update", "timestamp": 1003, "message": {"_type": "Decrement"}, "model": {"counter": 1}, "effects": []}

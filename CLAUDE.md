@@ -68,6 +68,11 @@ npm run agent:list-selectors 20
 
 # List windows
 npm run agent:list-windows
+
+# Toggle MCP border visibility (for clean screenshots)
+npm run agent:mcp-border hide    # Hide the red border
+npm run agent:mcp-border show    # Show the red border
+npm run agent:mcp-border toggle  # Toggle visibility (default)
 ```
 
 The browser-tools scripts automatically read the WebSocket URL from the most recent launch session, so no manual `WS_URL` configuration is needed.

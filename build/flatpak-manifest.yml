@@ -1,0 +1,32 @@
+app-id: com.teaforge.debugger
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '23.08'
+command: teaforge-debugger
+separate-locales: false
+
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=home:ro
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - name: teaforge-debugger
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 teaforge-debugger -t /app/bin/
+      - install -Dm644 com.teaforge.debugger.desktop -t /app/share/applications/
+      - install -Dm644 icon.png /app/share/icons/hicolor/256x256/apps/com.teaforge.debugger.png
+    sources:
+      - type: file
+        path: teaforge-debugger
+      - type: file
+        path: com.teaforge.debugger.desktop
+      - type: file
+        path: icon.png

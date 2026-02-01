@@ -11,6 +11,7 @@
 #   ./scripts/browser-tools.sh list-selectors [max]
 #   ./scripts/browser-tools.sh list-windows
 #   ./scripts/browser-tools.sh open-file /path/to/file.jsonl
+#   ./scripts/browser-tools.sh mcp-border [show|hide|toggle]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(dirname "$SCRIPT_DIR")"
@@ -80,9 +81,13 @@ case "$COMMAND" in
         fi
         exec node "$SCRIPT_DIR/open-file.js" "$FILE_ARG"
         ;;
+    mcp-border)
+        ACTION_ARG="${1:-toggle}"
+        exec node "$SCRIPT_DIR/toggle-mcp-border.js" "$ACTION_ARG"
+        ;;
     *)
         echo "Unknown command: $COMMAND" >&2
-        echo "Available commands: screenshot, click, type, wait-text, dump-dom, list-selectors, list-windows, open-file" >&2
+        echo "Available commands: screenshot, click, type, wait-text, dump-dom, list-selectors, list-windows, open-file, mcp-border" >&2
         exit 1
         ;;
 esac

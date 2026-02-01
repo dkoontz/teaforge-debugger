@@ -9,3 +9,12 @@ e2e/temp
 # OS
 .DS_Store
 .e2e-artifacts/
+
+# electron-builder output
+release/
+*.dmg
+*.AppImage
+*.exe
+*.flatpak
+*.snap
+

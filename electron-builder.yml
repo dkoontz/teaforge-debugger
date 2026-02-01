@@ -1,0 +1,89 @@
+appId: com.teaforge.debugger
+productName: TeaForge Debugger
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - main.js
+  - preload.js
+  - index.html
+  - dist/**/*
+  - node_modules/@fortawesome/fontawesome-free/css/all.min.css
+  - node_modules/@fortawesome/fontawesome-free/webfonts/**/*
+
+asar: true
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: build/icon.icns
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+dmg:
+  artifactName: "TeaForge-Debugger-${version}-${arch}.dmg"
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: "TeaForge-Debugger-Installer-${version}.${ext}"
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+
+portable:
+  artifactName: "TeaForge-Debugger-Standalone-${version}.${ext}"
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+    - target: flatpak
+      arch:
+        - x64
+        - arm64
+  category: Development
+  icon: build/icons
+
+appImage:
+  artifactName: "TeaForge-Debugger-${version}-${arch}.AppImage"
+
+flatpak:
+  baseVersion: "23.08"
+  runtimeVersion: "23.08"
+  branch: stable
+  artifactName: "TeaForge-Debugger-${version}-${arch}.flatpak"
+
+publish:
+  provider: github
+  owner: dkoontz
+  repo: teaforge-debugger
+  releaseType: draft

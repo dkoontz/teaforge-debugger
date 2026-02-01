@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teaforge.dev/schemas/tea-debug-log.json",
+  "title": "TEA Debug Log Entry",
+  "description": "Schema for TEA (The Elm Architecture) debug log entries in JSONL format. Each line in the log file is a single JSON object conforming to one of the entry types. Uses LZ78-style dictionary compression where string keys and values are replaced with integer references (e.g., '@0', '@5'). New strings are defined in stringDict entries before their first use.",
+  "oneOf": [
+    { "$ref": "#/$defs/headerEntry" },
+    { "$ref": "#/$defs/stringDictEntry" },
+    { "$ref": "#/$defs/initEntry" },
+    { "$ref": "#/$defs/updateEntry" },
+    { "$ref": "#/$defs/subscriptionChangeEntry" }
+  ],
+  "$defs": {
+    "headerEntry": {
+      "type": "object",
+      "description": "Header entry - first line of a compressed log file. Indicates the log format version and compression type.",
+      "properties": {
+        "type": {
+          "const": "header",
+          "description": "Entry type discriminator"
+        },
+        "version": {
+          "type": "integer",
+          "description": "Log format version. Version 1 uses string dictionary compression.",
+          "const": 1
+        },
+        "compression": {
+          "type": "string",
+          "description": "Compression type. 'stringDict' indicates LZ78-style dictionary compression where repeated strings are replaced with '@N' references.",
+          "enum": ["stringDict"]
+        }
+      },
+      "required": ["type", "version", "compression"],
+      "additionalProperties": false
+    },
+    "stringDictEntry": {
+      "type": "object",
+      "description": "String dictionary entry - emitted before entries that use new string references. Maps integer IDs to their string values.",
+      "properties": {
+        "type": {
+          "const": "stringDict",
+          "description": "Entry type discriminator"
+        },
+        "strings": {
+          "type": "object",
+          "description": "Map of string ID (as string key) to string value",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["type", "strings"],
+      "additionalProperties": false
+    },
+    "initEntry": {
+      "type": "object",
+      "description": "Captures the result of init() - initial model and bootstrap effects.",
+      "properties": {
+        "type": {
+          "const": "init",
+          "description": "Entry type discriminator"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "model": {
+          "$ref": "#/$defs/serializedValue",
+          "description": "The initial program model after init()"
+        },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/serializedValue" },
+          "description": "Effects returned from init()"
+        }
+      },
+      "required": ["type", "timestamp", "model", "effects"],
+      "additionalProperties": false
+    },
+    "updateEntry": {
+      "type": "object",
+      "description": "Captures each message dispatch through update().",
+      "properties": {
+        "type": {
+          "const": "update",
+          "description": "Entry type discriminator"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "message": {
+          "$ref": "#/$defs/serializedMessage",
+          "description": "The message that triggered the update"
+        },
+        "model": {
+          "$ref": "#/$defs/serializedValue",
+          "description": "The program model after update()"
+        },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/serializedValue" },
+          "description": "Effects returned from update()"
+        }
+      },
+      "required": ["type", "timestamp", "message", "model", "effects"],
+      "additionalProperties": false
+    },
+    "subscriptionChangeEntry": {
+      "type": "object",
+      "description": "Captures when subscriptions start or stop.",
+      "properties": {
+        "type": {
+          "const": "subscriptionChange",
+          "description": "Entry type discriminator"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "started": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/serializedValue" },
+          "description": "Subscriptions that were started"
+        },
+        "stopped": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/serializedValue" },
+          "description": "Subscriptions that were stopped"
+        }
+      },
+      "required": ["type", "timestamp", "started", "stopped"],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "integer",
+      "description": "Milliseconds since Unix epoch",
+      "minimum": 0
+    },
+    "serializedValue": {
+      "description": "A serialized TEA value. All typed values include _type with qualified path.",
+      "oneOf": [
+        { "$ref": "#/$defs/typedObject" },
+        { "$ref": "#/$defs/primitiveValue" },
+        { "type": "array" },
+        { "type": "object" }
+      ]
+    },
+    "serializedMessage": {
+      "description": "A serialized message, potentially with _inner for wrapper messages.",
+      "allOf": [
+        { "$ref": "#/$defs/typedObject" },
+        {
+          "type": "object",
+          "properties": {
+            "_inner": {
+              "$ref": "#/$defs/serializedValue",
+              "description": "The inner message for wrapper types (e.g., Message.Swerve containing SwerveSubsystem.Message)"
+            }
+          }
+        }
+      ]
+    },
+    "typedObject": {
+      "type": "object",
+      "description": "An object with type information",
+      "properties": {
+        "_type": {
+          "type": "string",
+          "description": "Qualified type name (e.g., 'SwerveSubsystem.Message.UpdateHeading')"
+        }
+      },
+      "required": ["_type"]
+    },
+    "primitiveValue": {
+      "description": "A primitive JSON value",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" }
+      ]
+    },
+    "functionReference": {
+      "type": "object",
+      "description": "A reference to a function passed as an argument.",
+      "properties": {
+        "_functionId": {
+          "type": "string",
+          "description": "Unique identifier for this function instance"
+        },
+        "_signature": {
+          "type": "string",
+          "description": "Function signature or type name"
+        }
+      },
+      "required": ["_functionId"],
+      "additionalProperties": false
+    },
+    "stringReference": {
+      "type": "string",
+      "description": "A reference to a string in the dictionary. Format is '@' followed by an integer ID.",
+      "pattern": "^@[0-9]+$"
+    }
+  }
+}

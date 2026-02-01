@@ -15,24 +15,25 @@ provides callback configuration for user interactions.
 
 -}
 
+import Array exposing (Array)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
-import Types exposing (DisplayOrder(..), LogEntry)
+import Types exposing (DisplayOrder(..), LogEntry(..), getMessageName, getTimestamp)
 
 
 {-| Configuration for the MessageList component.
 
   - `selectedIndex`: Currently selected message index, if any
   - `onSelect`: Callback when a message is selected
-  - `entries`: List of log entries to display
+  - `entries`: Array of log entries to display
   - `displayOrder`: How to order messages (newest or oldest first)
 
 -}
 type alias Config msg =
     { selectedIndex : Maybe Int
     , onSelect : Int -> msg
-    , entries : List LogEntry
+    , entries : Array LogEntry
     , displayOrder : DisplayOrder
     }
 
@@ -40,6 +41,7 @@ type alias Config msg =
 {-| Render the complete message list.
 
 Displays messages based on the configured display order:
+
   - ReverseChronological: newest at top (default)
   - Chronological: oldest at top
 
@@ -48,13 +50,17 @@ Uses DaisyUI menu component styling.
 -}
 view : Config msg -> Html msg
 view config =
-    if List.isEmpty config.entries then
+    if Array.isEmpty config.entries then
         viewEmpty
 
     else
         let
             totalCount =
-                List.length config.entries
+                Array.length config.entries
+
+            -- Build list of (displayIndex, originalIndex, entry) tuples
+            indexedEntries =
+                Array.toIndexedList config.entries
 
             -- For ReverseChronological: reverse entries (newest first)
             -- For Chronological: keep original order (oldest first)
@@ -62,21 +68,21 @@ view config =
                 case config.displayOrder of
                     ReverseChronological ->
                         -- Reverse entries, map display index back to original
-                        ( List.reverse config.entries
+                        ( List.reverse indexedEntries
                         , \displayIndex -> totalCount - 1 - displayIndex
                         )
 
                     Chronological ->
                         -- Keep original order, display index equals original index
-                        ( config.entries
+                        ( indexedEntries
                         , \displayIndex -> displayIndex
                         )
 
-            viewItemWithIndex displayIndex entry =
-                viewItem config.selectedIndex config.onSelect (indexMapper displayIndex) entry
+            viewItemWithDisplayIndex displayIndex ( originalIndex, entry ) =
+                viewItem config.selectedIndex config.onSelect originalIndex entry
         in
         ul [ class "flex flex-col gap-1 p-2 flex-1 overflow-y-auto overflow-x-hidden min-w-0" ]
-            (List.indexedMap viewItemWithIndex displayEntries)
+            (List.indexedMap viewItemWithDisplayIndex displayEntries)
 
 
 {-| Render the empty state when no messages are loaded.
@@ -107,9 +113,20 @@ viewItem selectedIndex onSelect index entry =
         isSelected =
             selectedIndex == Just index
 
+        isError =
+            case entry of
+                ErrorEntry _ ->
+                    True
+
+                _ ->
+                    False
+
         itemClasses =
             if isSelected then
                 "block px-3 py-1.5 rounded-lg bg-primary/10 border-l-2 border-primary cursor-pointer"
+
+            else if isError then
+                "block px-3 py-1.5 rounded-lg hover:bg-error/10 border-l-2 border-error/50 cursor-pointer"
 
             else
                 "block px-3 py-1.5 rounded-lg hover:bg-base-300 border-l-2 border-transparent cursor-pointer"
@@ -118,8 +135,44 @@ viewItem selectedIndex onSelect index entry =
             if isSelected then
                 "block font-medium text-primary text-sm overflow-hidden whitespace-nowrap"
 
+            else if isError then
+                "block font-medium text-error text-sm overflow-hidden whitespace-nowrap"
+
             else
                 "block font-medium text-sm overflow-hidden whitespace-nowrap"
+
+        messageName =
+            getMessageName entry
+
+        timestampText =
+            case entry of
+                ErrorEntry data ->
+                    "Line " ++ String.fromInt data.lineNumber
+
+                _ ->
+                    case getTimestamp entry of
+                        Just ts ->
+                            "#" ++ String.fromInt (index + 1) ++ " · " ++ formatTimestamp ts
+
+                        Nothing ->
+                            "#" ++ String.fromInt (index + 1)
+
+        iconHtml =
+            case entry of
+                ErrorEntry _ ->
+                    span [ class "mr-1" ]
+                        [ i [ class "fa-solid fa-triangle-exclamation text-error" ] [] ]
+
+                InitEntry _ ->
+                    span [ class "mr-1" ]
+                        [ i [ class "fa-solid fa-play text-success" ] [] ]
+
+                SubscriptionChangeEntry _ ->
+                    span [ class "mr-1" ]
+                        [ i [ class "fa-solid fa-arrows-rotate text-info" ] [] ]
+
+                UpdateEntry _ ->
+                    text ""
     in
     li [ class "min-w-0" ]
         [ a
@@ -133,12 +186,14 @@ viewItem selectedIndex onSelect index entry =
                 [ class textClasses
                 , style "text-overflow" "ellipsis"
                 ]
-                [ text entry.message.name ]
+                [ iconHtml
+                , text messageName
+                ]
             , span
                 [ class "block text-xs text-base-content/60 overflow-hidden whitespace-nowrap"
                 , style "text-overflow" "ellipsis"
                 ]
-                [ text ("#" ++ String.fromInt (index + 1) ++ " · " ++ formatTimestamp entry.timestamp) ]
+                [ text timestampText ]
             ]
         ]
 

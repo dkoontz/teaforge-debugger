@@ -1,52 +1,13 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const readline = require('readline');
 
 let mainWindow;
 
-// Maximum file size (500 MB) - V8 has a ~512MB string limit
-const MAX_FILE_SIZE = 500 * 1024 * 1024;
-
-/**
- * Read a file with size checking and user-friendly error messages.
- * @param {string} filePath - Path to the file to read
- * @returns {{ success: boolean, content?: string, error?: string }}
- */
-function readFileWithSizeCheck(filePath) {
-    const absolutePath = path.resolve(filePath);
-
-    // Check file exists and get size
-    let stats;
-    try {
-        stats = fs.statSync(absolutePath);
-    } catch (err) {
-        return { success: false, error: `File not found: ${absolutePath}` };
-    }
-
-    // Check file size
-    const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(1);
-    if (stats.size > MAX_FILE_SIZE) {
-        return {
-            success: false,
-            error: `File too large: ${fileSizeMB} MB exceeds the 500 MB limit. Consider splitting the log file into smaller chunks.`
-        };
-    }
-
-    // Read file content
-    try {
-        const content = fs.readFileSync(absolutePath, 'utf8');
-        return { success: true, content };
-    } catch (err) {
-        // Check for V8 string length error
-        if (err.message && err.message.includes('string longer than')) {
-            return {
-                success: false,
-                error: `File too large: ${fileSizeMB} MB exceeds JavaScript's string size limit. Consider splitting the log file into smaller chunks.`
-            };
-        }
-        return { success: false, error: `Failed to read file: ${err.message}` };
-    }
-}
+// Track active input stream
+let activeStream = null;
+let lineNumber = 0;
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -68,29 +29,76 @@ function createWindow() {
     });
 }
 
-// IPC Handler: Read file contents
-ipcMain.handle('read-file', async (event, filePath) => {
-    return readFileWithSizeCheck(filePath);
-});
+// IPC Handler: Open input source (streaming file read)
+ipcMain.handle('open-input', async (event, filePath) => {
+    // Close any existing stream
+    if (activeStream) {
+        activeStream.close();
+        activeStream = null;
+    }
 
-// IPC Handler: List files in directory
-ipcMain.handle('list-files', async (event, dirPath) => {
+    lineNumber = 0;
+    const absolutePath = path.resolve(filePath);
+
+    // Check file exists
     try {
-        const absolutePath = path.resolve(dirPath);
-        const entries = fs.readdirSync(absolutePath, { withFileTypes: true });
-        const files = entries.map(entry => ({
-            name: entry.name,
-            path: path.join(absolutePath, entry.name),
-            isDirectory: entry.isDirectory(),
-            isFile: entry.isFile()
-        }));
-        return { success: true, files };
-    } catch (error) {
-        return { success: false, error: error.message };
+        fs.accessSync(absolutePath, fs.constants.R_OK);
+    } catch (err) {
+        return { success: false, error: `File not found: ${absolutePath}` };
+    }
+
+    try {
+        const stream = fs.createReadStream(absolutePath, { encoding: 'utf8' });
+        const rl = readline.createInterface({ input: stream });
+
+        activeStream = rl;
+
+        rl.on('line', (line) => {
+            lineNumber++;
+            const trimmed = line.trim();
+            if (!trimmed) return; // skip empty lines
+
+            try {
+                const parsed = JSON.parse(trimmed);
+                mainWindow.webContents.send('entry-received', {
+                    lineNumber,
+                    entry: parsed
+                });
+            } catch (e) {
+                // Send parse error as an error entry
+                mainWindow.webContents.send('entry-received', {
+                    lineNumber,
+                    error: e.message,
+                    rawText: trimmed.substring(0, 200)
+                });
+            }
+        });
+
+        rl.on('close', () => {
+            mainWindow.webContents.send('input-closed', {});
+            activeStream = null;
+        });
+
+        rl.on('error', (err) => {
+            mainWindow.webContents.send('input-error', { error: err.message });
+        });
+
+        return { success: true, path: absolutePath };
+    } catch (err) {
+        return { success: false, error: err.message };
     }
 });
 
-// IPC Handler: Open file dialog
+// IPC Handler: Close input source
+ipcMain.handle('close-input', async () => {
+    if (activeStream) {
+        activeStream.close();
+        activeStream = null;
+    }
+    return { success: true };
+});
+
+// IPC Handler: Open file dialog (returns selected path, doesn't read file)
 ipcMain.handle('open-file-dialog', async () => {
     try {
         const result = await dialog.showOpenDialog(mainWindow, {
@@ -105,13 +113,7 @@ ipcMain.handle('open-file-dialog', async () => {
             return { success: true, canceled: true, filePath: null };
         }
 
-        const filePath = result.filePaths[0];
-        const readResult = readFileWithSizeCheck(filePath);
-        if (readResult.success) {
-            return { success: true, canceled: false, filePath, content: readResult.content };
-        } else {
-            return { success: false, error: readResult.error };
-        }
+        return { success: true, canceled: false, filePath: result.filePaths[0] };
     } catch (error) {
         return { success: false, error: error.message };
     }
@@ -149,19 +151,15 @@ function createMenu() {
                             const result = await dialog.showOpenDialog(mainWindow, {
                                 properties: ['openFile'],
                                 filters: [
-                                    { name: 'TeaForge Logs', extensions: ['log', 'json'] },
+                                    { name: 'TeaForge Logs', extensions: ['log', 'json', 'jsonl'] },
                                     { name: 'All Files', extensions: ['*'] }
                                 ]
                             });
 
                             if (!result.canceled && result.filePaths.length > 0) {
                                 const filePath = result.filePaths[0];
-                                const readResult = readFileWithSizeCheck(filePath);
-                                if (readResult.success) {
-                                    mainWindow.webContents.send('file-opened', { filePath, content: readResult.content });
-                                } else {
-                                    dialog.showErrorBox('Error', readResult.error);
-                                }
+                                // Send the file path to open via streaming
+                                mainWindow.webContents.send('file-selected', { filePath });
                             }
                         }
                     }
@@ -259,14 +257,8 @@ app.whenReady().then(() => {
             // Small delay to ensure Elm app initializes
             setTimeout(() => {
                 const filePath = path.resolve(autoOpenFile);
-                const readResult = readFileWithSizeCheck(filePath);
-                if (readResult.success) {
-                    mainWindow.webContents.send('file-opened', { filePath, content: readResult.content });
-                } else {
-                    console.error(`Failed to auto-open file: ${readResult.error}`);
-                    // Send error to Elm app so it can display it
-                    mainWindow.webContents.send('file-opened', { filePath, error: readResult.error });
-                }
+                // Send file-selected event to trigger streaming open
+                mainWindow.webContents.send('file-selected', { filePath });
             }, 100);
         });
     }

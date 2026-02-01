@@ -44,32 +44,31 @@
                     switch (type) {
                         case 'openFileDialog':
                             const dialogResult = await window.electron.openFileDialog();
+                            if (dialogResult.success && !dialogResult.canceled && dialogResult.filePath) {
+                                // Immediately open the file for streaming
+                                sendToElm({
+                                    type: 'openInput',
+                                    payload: { path: dialogResult.filePath }
+                                });
+                            } else if (!dialogResult.success) {
+                                sendToElm({
+                                    type: 'inputError',
+                                    payload: { error: dialogResult.error || 'Failed to open file dialog' }
+                                });
+                            }
+                            // If canceled, do nothing
+                            break;
+
+                        case 'openInput':
+                            const openResult = await window.electron.openInput(payload.path);
                             sendToElm({
-                                type: 'fileDialogResult',
-                                payload: dialogResult
+                                type: 'inputOpened',
+                                payload: openResult
                             });
                             break;
 
-                        case 'readFile':
-                            const readResult = await window.electron.readFile(payload.path);
-                            sendToElm({
-                                type: 'fileReadResult',
-                                payload: {
-                                    path: payload.path,
-                                    ...readResult
-                                }
-                            });
-                            break;
-
-                        case 'listFiles':
-                            const listResult = await window.electron.listFiles(payload.path);
-                            sendToElm({
-                                type: 'fileListResult',
-                                payload: {
-                                    path: payload.path,
-                                    ...listResult
-                                }
-                            });
+                        case 'closeInput':
+                            await window.electron.closeInput();
                             break;
 
                         case 'scrollIntoView':
@@ -99,9 +98,8 @@
                 } catch (error) {
                     console.error('Error handling port message:', error);
                     sendToElm({
-                        type: 'error',
+                        type: 'inputError',
                         payload: {
-                            originalType: type,
                             error: error.message
                         }
                     });
@@ -120,16 +118,43 @@
         window.app = app;
         window.sendToElm = sendToElm;
 
-        // Listen for files opened via the File menu (Cmd+O)
-        if (window.electron.onFileOpened) {
-            window.electron.onFileOpened((data) => {
+        // Listen for entry-received events (streaming log entries)
+        if (window.electron.onEntryReceived) {
+            window.electron.onEntryReceived((data) => {
                 sendToElm({
-                    type: 'fileReadResult',
-                    payload: {
-                        success: true,
-                        content: data.content,
-                        path: data.filePath
-                    }
+                    type: 'entryReceived',
+                    payload: data
+                });
+            });
+        }
+
+        // Listen for input-error events
+        if (window.electron.onInputError) {
+            window.electron.onInputError((data) => {
+                sendToElm({
+                    type: 'inputError',
+                    payload: data
+                });
+            });
+        }
+
+        // Listen for input-closed events
+        if (window.electron.onInputClosed) {
+            window.electron.onInputClosed((data) => {
+                sendToElm({
+                    type: 'inputClosed',
+                    payload: data
+                });
+            });
+        }
+
+        // Listen for files selected via the File menu (Cmd+O)
+        if (window.electron.onFileSelected) {
+            window.electron.onFileSelected((data) => {
+                // Trigger opening the file for streaming
+                sendToElm({
+                    type: 'openInput',
+                    payload: { path: data.filePath }
                 });
             });
         }

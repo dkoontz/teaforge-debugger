@@ -8,6 +8,7 @@ communication with JavaScript via ports.
 
 -}
 
+import Array exposing (Array)
 import Browser
 import Browser.Dom as Dom
 import Browser.Events
@@ -18,14 +19,27 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Json.Decode as D
 import Json.Encode as E
-import LogParser exposing (MalformedEntryInfo, ParseError(..), parseLogFile)
+import LogParser
 import MessageList
 import Ports
 import Search
 import Set exposing (Set)
 import Task
 import TreeView
-import Types exposing (DisplayOrder(..), Effect, LoadingState(..), LogEntry, TreePath)
+import Types
+    exposing
+        ( DisplayOrder(..)
+        , Effect
+        , ErrorEntryData
+        , InitEntryData
+        , InputSource
+        , LogEntry(..)
+        , SubscriptionChangeData
+        , TreePath
+        , UpdateEntryData
+        , getMessageName
+        , getTimestamp
+        )
 
 
 
@@ -140,20 +154,23 @@ updateMessageViewState updateFn model =
 
 {-| The application model containing all state.
 
-This structure follows the design from the spec, managing:
+This structure manages:
 
-  - Log entries loaded from a file
+  - Log entries received from the input source (stored as Array for efficient appending)
+  - Active input source (file being read)
   - Currently selected message index
   - View options (show previous state, highlight changes)
   - Search and filter state
-  - UI state (sidebar width, loading state)
+  - UI state (sidebar width)
   - Tree view states for after and before states
   - Diff view state (expanded paths, computed changes)
   - Per-message view states for retaining expansion state
 
 -}
 type alias Model =
-    { logEntries : List LogEntry
+    { logEntries : Array LogEntry
+    , inputSource : Maybe InputSource
+    , lastModelAfter : D.Value
     , selectedIndex : Maybe Int
     , displayOrder : DisplayOrder
     , showPreviousState : Bool
@@ -165,9 +182,7 @@ type alias Model =
     , filterExpandedPaths : Set String
     , sidebarWidth : Int
     , isResizingSidebar : Bool
-    , loadingState : LoadingState
     , errorMessage : Maybe String
-    , skippedEntries : Int
     , treeViewState : TreeView.State
     , beforeTreeViewState : TreeView.State
     , changedPaths : List TreePath
@@ -193,7 +208,7 @@ flagsDecoder =
 
 {-| Initialize the model with default values.
 
-The application starts in an Idle state with no file loaded.
+The application starts with no active input source.
 Sidebar width is loaded from localStorage via flags.
 
 -}
@@ -208,7 +223,9 @@ init flagsValue =
                 Err _ ->
                     320
     in
-    ( { logEntries = []
+    ( { logEntries = Array.empty
+      , inputSource = Nothing
+      , lastModelAfter = E.null
       , selectedIndex = Nothing
       , displayOrder = ReverseChronological
       , showPreviousState = False
@@ -220,9 +237,7 @@ init flagsValue =
       , filterExpandedPaths = Set.singleton ""
       , sidebarWidth = initialSidebarWidth
       , isResizingSidebar = False
-      , loadingState = Idle
       , errorMessage = Nothing
-      , skippedEntries = 0
       , treeViewState = TreeView.init
       , beforeTreeViewState = TreeView.init
       , changedPaths = []
@@ -241,7 +256,8 @@ init flagsValue =
 
 These are organized into categories:
 
-  - File operations (opening, loading)
+  - File operations (opening input sources)
+  - Streaming (receiving entries)
   - Navigation (selecting messages)
   - View mode changes
   - Search operations
@@ -251,8 +267,12 @@ These are organized into categories:
 type Msg
     = -- File Operations
       OpenFileDialog
-    | FileDialogResult { success : Bool, filePath : Maybe String, error : Maybe String }
-    | FileReadResult { success : Bool, content : Maybe String, path : String, error : Maybe String }
+    | OpenInput String
+    | InputOpened { success : Bool, path : Maybe String, error : Maybe String }
+      -- Streaming
+    | EntryReceived EntryPayload
+    | InputError String
+    | InputClosed
       -- Navigation
     | SelectMessage Int
     | SelectNextMessage
@@ -304,6 +324,16 @@ type Msg
     | StopSidebarResize
 
 
+{-| Payload for a received entry from the input source.
+-}
+type alias EntryPayload =
+    { lineNumber : Int
+    , entry : Maybe D.Value
+    , error : Maybe String
+    , rawText : Maybe String
+    }
+
+
 
 -- UPDATE
 
@@ -318,309 +348,106 @@ update msg model =
     case msg of
         -- File Operations
         OpenFileDialog ->
-            ( { model | loadingState = Loading }
+            ( model
             , Ports.openFileDialog
             )
 
-        FileDialogResult result ->
-            if result.success then
-                case result.filePath of
-                    Just path ->
-                        ( model
-                        , Ports.readFile path
-                        )
+        OpenInput path ->
+            -- Clear existing entries and open new input source
+            ( { model
+                | logEntries = Array.empty
+                , inputSource = Just { path = path, label = path }
+                , lastModelAfter = E.null
+                , selectedIndex = Nothing
+                , errorMessage = Nothing
+                , messageViewStates = Dict.empty
+                , changedPaths = []
+                , changes = Dict.empty
+              }
+            , Ports.openInput path
+            )
 
-                    Nothing ->
-                        -- User cancelled the dialog
-                        ( { model | loadingState = Idle }
-                        , Cmd.none
-                        )
+        InputOpened result ->
+            if result.success then
+                ( model, Cmd.none )
 
             else
                 ( { model
-                    | loadingState = Error (Maybe.withDefault "Failed to open file dialog" result.error)
+                    | errorMessage = result.error
+                    , inputSource = Nothing
                   }
                 , Cmd.none
                 )
 
-        FileReadResult result ->
-            if result.success then
-                case result.content of
-                    Just content ->
-                        case parseLogFile content of
-                            Ok ( entries, skippedCount ) ->
-                                if List.isEmpty entries && skippedCount == 0 then
-                                    ( { model
-                                        | loadingState = Error "No log entries found in file"
-                                        , logEntries = []
-                                        , selectedIndex = Nothing
-                                        , skippedEntries = 0
-                                      }
-                                    , Cmd.none
-                                    )
+        -- Streaming
+        EntryReceived payload ->
+            handleEntryReceived payload model
 
-                                else
-                                    let
-                                        -- Select the most recent (last) entry by default
-                                        lastEntry =
-                                            entries
-                                                |> List.reverse
-                                                |> List.head
+        InputError errorMsg ->
+            ( { model | errorMessage = Just errorMsg }
+            , Cmd.none
+            )
 
-                                        lastIndex =
-                                            List.length entries - 1
+        InputClosed ->
+            -- Stream finished, select last entry if none selected
+            let
+                entryCount =
+                    Array.length model.logEntries
 
-                                        -- Parse the last entry's modelAfter for tree view
-                                        initialTreeState =
-                                            lastEntry
-                                                |> Maybe.map
-                                                    (\entry ->
-                                                        case TreeView.parseValue entry.modelAfter TreeView.init of
-                                                            Ok state ->
-                                                                state
+                newSelectedIndex =
+                    if model.selectedIndex == Nothing && entryCount > 0 then
+                        Just (entryCount - 1)
 
-                                                            Err _ ->
-                                                                TreeView.init
-                                                    )
-                                                |> Maybe.withDefault TreeView.init
+                    else
+                        model.selectedIndex
+            in
+            case newSelectedIndex of
+                Just idx ->
+                    if model.selectedIndex == Nothing then
+                        -- Auto-select the last entry
+                        update (SelectMessage idx) model
 
-                                        -- Parse the last entry's modelBefore for split view
-                                        initialBeforeTreeState =
-                                            lastEntry
-                                                |> Maybe.map
-                                                    (\entry ->
-                                                        case TreeView.parseValue entry.modelBefore TreeView.init of
-                                                            Ok state ->
-                                                                state
+                    else
+                        ( model, Cmd.none )
 
-                                                            Err _ ->
-                                                                TreeView.init
-                                                    )
-                                                |> Maybe.withDefault TreeView.init
-
-                                        -- Compute diff for the last entry
-                                        diffResult =
-                                            lastEntry
-                                                |> Maybe.map
-                                                    (\entry ->
-                                                        Diff.findChangedPaths entry.modelBefore entry.modelAfter
-                                                    )
-
-                                        initialChangedPaths =
-                                            diffResult
-                                                |> Maybe.map .changedPaths
-                                                |> Maybe.withDefault []
-
-                                        initialChanges =
-                                            diffResult
-                                                |> Maybe.map .changes
-                                                |> Maybe.withDefault Dict.empty
-
-                                        -- Create initial view state with auto-expanded changed paths
-                                        initialMessageViewState =
-                                            messageViewStateWithChanges initialChangedPaths
-
-                                        -- Store the initial view state for the last entry
-                                        initialMessageViewStates =
-                                            Dict.singleton lastIndex initialMessageViewState
-                                    in
-                                    ( { model
-                                        | loadingState = Loaded
-                                        , logEntries = entries
-                                        , selectedIndex =
-                                            if List.isEmpty entries then
-                                                Nothing
-
-                                            else
-                                                Just lastIndex
-                                        , skippedEntries = skippedCount
-                                        , errorMessage =
-                                            if skippedCount > 0 then
-                                                Just (String.fromInt skippedCount ++ " malformed entries were skipped")
-
-                                            else
-                                                Nothing
-                                        , treeViewState = initialTreeState
-                                        , beforeTreeViewState = initialBeforeTreeState
-                                        , changedPaths = initialChangedPaths
-                                        , changes = initialChanges
-                                        , messageViewStates = initialMessageViewStates
-                                      }
-                                    , Cmd.none
-                                    )
-
-                            Err parseError ->
-                                ( { model
-                                    | loadingState = Error (parseErrorToString parseError)
-                                    , logEntries = []
-                                    , selectedIndex = Nothing
-                                    , skippedEntries = 0
-                                  }
-                                , Cmd.none
-                                )
-
-                    Nothing ->
-                        ( { model | loadingState = Error "File was empty" }
-                        , Cmd.none
-                        )
-
-            else
-                ( { model
-                    | loadingState = Error (Maybe.withDefault "Failed to read file" result.error)
-                  }
-                , Cmd.none
-                )
+                Nothing ->
+                    ( model, Cmd.none )
 
         -- Navigation
         SelectMessage index ->
             let
-                -- Get the selected log entry's modelAfter and parse it for tree view
+                -- Get the selected log entry
                 maybeEntry =
-                    model.logEntries
-                        |> List.drop index
-                        |> List.head
-
-                newTreeState =
-                    maybeEntry
-                        |> Maybe.map
-                            (\entry ->
-                                case TreeView.parseValue entry.modelAfter model.treeViewState of
-                                    Ok state ->
-                                        state
-
-                                    Err _ ->
-                                        -- If parsing fails, keep the default state
-                                        TreeView.init
-                            )
-                        |> Maybe.withDefault TreeView.init
-
-                -- Parse the before state for split view
-                newBeforeTreeState =
-                    maybeEntry
-                        |> Maybe.map
-                            (\entry ->
-                                case TreeView.parseValue entry.modelBefore model.beforeTreeViewState of
-                                    Ok state ->
-                                        state
-
-                                    Err _ ->
-                                        -- If parsing fails, keep the default state
-                                        TreeView.init
-                            )
-                        |> Maybe.withDefault TreeView.init
-
-                -- Compute diff for the diff view
-                diffResult =
-                    maybeEntry
-                        |> Maybe.map
-                            (\entry ->
-                                Diff.findChangedPaths entry.modelBefore entry.modelAfter
-                            )
-
-                newChangedPaths =
-                    diffResult
-                        |> Maybe.map .changedPaths
-                        |> Maybe.withDefault []
-
-                newChanges =
-                    diffResult
-                        |> Maybe.map .changes
-                        |> Maybe.withDefault Dict.empty
-
-                -- Re-run search if there's an active query
-                newSearchResult =
-                    if String.isEmpty model.searchQuery then
-                        Search.emptyEntrySearchResult
-
-                    else
-                        maybeEntry
-                            |> Maybe.map (Search.searchEntry model.searchQuery)
-                            |> Maybe.withDefault Search.emptyEntrySearchResult
-
-                -- Get or create the view state for this message
-                -- If we've never visited this message before, create initial state
-                -- with auto-expanded changed paths (when showChangedValues is true)
-                existingViewState =
-                    Dict.get index model.messageViewStates
-
-                messageViewState =
-                    case existingViewState of
-                        Just state ->
-                            -- Use existing state (preserves user's expand/collapse choices)
-                            state
-
-                        Nothing ->
-                            -- First time viewing this message - create initial state
-                            if model.showChangedValues then
-                                messageViewStateWithChanges newChangedPaths
-
-                            else
-                                defaultMessageViewState
-
-                -- Update the messageViewStates dict with the current state
-                newMessageViewStates =
-                    Dict.insert index messageViewState model.messageViewStates
+                    Array.get index model.logEntries
             in
-            ( { model
-                | selectedIndex = Just index
-                , treeViewState = newTreeState
-                , beforeTreeViewState = newBeforeTreeState
-                , changedPaths = newChangedPaths
-                , changes = newChanges
-                , messageViewStates = newMessageViewStates
-                , searchResult = newSearchResult
-                , currentMatchIndex =
-                    if newSearchResult.totalMatchCount == 0 then
-                        0
+            case maybeEntry of
+                Nothing ->
+                    ( model, Cmd.none )
 
-                    else
-                        -- Try to preserve the current match index, or reset to 0
-                        Basics.min model.currentMatchIndex (newSearchResult.totalMatchCount - 1)
-                            |> Basics.max 0
-                , filterExpandedPaths =
-                    -- Update filter expanded paths if searching
-                    if String.isEmpty model.searchQuery then
-                        model.filterExpandedPaths
-
-                    else
-                        Search.buildVisiblePaths newSearchResult.afterMatches
-              }
-            , Cmd.none
-            )
+                Just entry ->
+                    selectEntry index entry model
 
         -- Keyboard Navigation
-        -- "Next" and "Previous" are defined in terms of visual direction on screen:
-        -- - Next = visually down (ArrowDown)
-        -- - Previous = visually up (ArrowUp)
-        -- The displayOrder determines how this maps to data indices.
-        -- For ReverseChronological: view reverses the list, so display position 0 = highest index
-        -- Moving down visually means going to lower display positions, which means lower indices.
         SelectNextMessage ->
             let
                 maxIndex =
-                    List.length model.logEntries - 1
+                    Array.length model.logEntries - 1
 
-                -- For ReverseChronological: display is reversed, higher indices at top
-                --   Down = toward lower display positions = toward lower indices
-                -- For Chronological: display matches data order
-                --   Down = toward higher display positions = toward higher indices
                 newIndex =
                     case ( model.displayOrder, model.selectedIndex ) of
                         ( ReverseChronological, Just idx ) ->
                             Basics.max (idx - 1) 0
 
                         ( ReverseChronological, Nothing ) ->
-                            -- If nothing selected, select the visually first (top) entry
                             maxIndex
 
                         ( Chronological, Just idx ) ->
                             Basics.min (idx + 1) maxIndex
 
                         ( Chronological, Nothing ) ->
-                            -- If nothing selected, select the visually first (top) entry
                             0
             in
-            if List.isEmpty model.logEntries then
+            if Array.isEmpty model.logEntries then
                 ( model, Cmd.none )
 
             else
@@ -639,29 +466,23 @@ update msg model =
         SelectPreviousMessage ->
             let
                 maxIndex =
-                    List.length model.logEntries - 1
+                    Array.length model.logEntries - 1
 
-                -- For ReverseChronological: display is reversed, higher indices at top
-                --   Up = toward higher display positions = toward higher indices
-                -- For Chronological: display matches data order
-                --   Up = toward lower display positions = toward lower indices
                 newIndex =
                     case ( model.displayOrder, model.selectedIndex ) of
                         ( ReverseChronological, Just idx ) ->
                             Basics.min (idx + 1) maxIndex
 
                         ( ReverseChronological, Nothing ) ->
-                            -- If nothing selected, select the visually last (bottom) entry
                             0
 
                         ( Chronological, Just idx ) ->
                             Basics.max (idx - 1) 0
 
                         ( Chronological, Nothing ) ->
-                            -- If nothing selected, select the visually last (bottom) entry
                             maxIndex
             in
-            if List.isEmpty model.logEntries then
+            if Array.isEmpty model.logEntries then
                 ( model, Cmd.none )
 
             else
@@ -684,7 +505,6 @@ update msg model =
             )
 
         ToggleShowChangedValues ->
-            -- Simply toggle the highlight setting; preserve user's expand/collapse state
             ( { model | showChangedValues = not model.showChangedValues }
             , Cmd.none
             )
@@ -700,18 +520,13 @@ update msg model =
                 -- Get the current entry for search
                 maybeEntry =
                     model.selectedIndex
-                        |> Maybe.andThen
-                            (\idx ->
-                                model.logEntries
-                                    |> List.drop idx
-                                    |> List.head
-                            )
+                        |> Maybe.andThen (\idx -> Array.get idx model.logEntries)
 
                 -- Perform search on the entire entry
                 newSearchResult =
                     case maybeEntry of
                         Just entry ->
-                            Search.searchEntry query entry
+                            searchLogEntry query entry
 
                         Nothing ->
                             Search.emptyEntrySearchResult
@@ -731,7 +546,6 @@ update msg model =
                     else
                         model.filterActive
                 , filterExpandedPaths =
-                    -- Auto-expand paths with matches when filtering
                     if queryIsBlank then
                         Set.singleton ""
 
@@ -905,13 +719,8 @@ update msg model =
             let
                 maybeBeforeState =
                     model.selectedIndex
-                        |> Maybe.andThen
-                            (\idx ->
-                                model.logEntries
-                                    |> List.drop idx
-                                    |> List.head
-                                    |> Maybe.map .modelBefore
-                            )
+                        |> Maybe.andThen (\idx -> Array.get idx model.logEntries)
+                        |> Maybe.andThen getModelBefore
 
                 allPaths =
                     maybeBeforeState
@@ -931,13 +740,8 @@ update msg model =
             let
                 maybeAfterState =
                     model.selectedIndex
-                        |> Maybe.andThen
-                            (\idx ->
-                                model.logEntries
-                                    |> List.drop idx
-                                    |> List.head
-                                    |> Maybe.map .modelAfter
-                            )
+                        |> Maybe.andThen (\idx -> Array.get idx model.logEntries)
+                        |> Maybe.andThen getModelAfter
 
                 allPaths =
                     maybeAfterState
@@ -957,13 +761,8 @@ update msg model =
             let
                 maybeAfterState =
                     model.selectedIndex
-                        |> Maybe.andThen
-                            (\idx ->
-                                model.logEntries
-                                    |> List.drop idx
-                                    |> List.head
-                                    |> Maybe.map .modelAfter
-                            )
+                        |> Maybe.andThen (\idx -> Array.get idx model.logEntries)
+                        |> Maybe.andThen getModelAfter
 
                 allPaths =
                     maybeAfterState
@@ -1012,13 +811,8 @@ update msg model =
             let
                 maybeEffectData =
                     model.selectedIndex
-                        |> Maybe.andThen
-                            (\idx ->
-                                model.logEntries
-                                    |> List.drop idx
-                                    |> List.head
-                                    |> Maybe.map .effects
-                            )
+                        |> Maybe.andThen (\idx -> Array.get idx model.logEntries)
+                        |> Maybe.andThen getEffects
                         |> Maybe.andThen
                             (\effects ->
                                 effects
@@ -1073,13 +867,8 @@ update msg model =
             let
                 maybePayload =
                     model.selectedIndex
-                        |> Maybe.andThen
-                            (\idx ->
-                                model.logEntries
-                                    |> List.drop idx
-                                    |> List.head
-                                    |> Maybe.map (.message >> .payload)
-                            )
+                        |> Maybe.andThen (\idx -> Array.get idx model.logEntries)
+                        |> Maybe.andThen getMessagePayload
 
                 allPaths =
                     maybePayload
@@ -1099,16 +888,7 @@ update msg model =
 
         -- Error Handling
         DismissError ->
-            ( { model
-                | errorMessage = Nothing
-                , loadingState =
-                    case model.loadingState of
-                        Error _ ->
-                            Idle
-
-                        other ->
-                            other
-              }
+            ( { model | errorMessage = Nothing }
             , Cmd.none
             )
 
@@ -1133,10 +913,256 @@ update msg model =
             )
 
 
+{-| Handle a received entry from the input source.
+-}
+handleEntryReceived : EntryPayload -> Model -> ( Model, Cmd Msg )
+handleEntryReceived payload model =
+    case payload.error of
+        Just errorMsg ->
+            -- Malformed entry - add as ErrorEntry
+            let
+                errorEntry =
+                    ErrorEntry
+                        { lineNumber = payload.lineNumber
+                        , rawText = Maybe.withDefault "" payload.rawText
+                        , error = errorMsg
+                        }
+
+                newEntries =
+                    Array.push errorEntry model.logEntries
+            in
+            ( { model | logEntries = newEntries }
+            , Cmd.none
+            )
+
+        Nothing ->
+            case payload.entry of
+                Just rawValue ->
+                    processValidEntry payload.lineNumber rawValue model
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+
+{-| Process a valid JSON entry and add it to the log.
+-}
+processValidEntry : Int -> D.Value -> Model -> ( Model, Cmd Msg )
+processValidEntry lineNum rawValue model =
+    case D.decodeValue LogParser.entryTypeDecoder rawValue of
+        Ok "header" ->
+            -- Skip header entries
+            ( model, Cmd.none )
+
+        Ok "init" ->
+            case D.decodeValue LogParser.initDataDecoder rawValue of
+                Ok initData ->
+                    let
+                        entry =
+                            InitEntry
+                                { timestamp = initData.timestamp
+                                , model = initData.model
+                                , effects = initData.effects
+                                }
+
+                        newEntries =
+                            Array.push entry model.logEntries
+                    in
+                    ( { model
+                        | logEntries = newEntries
+                        , lastModelAfter = initData.model
+                      }
+                    , Cmd.none
+                    )
+
+                Err e ->
+                    addErrorEntry lineNum (D.errorToString e) model
+
+        Ok "update" ->
+            case D.decodeValue LogParser.updateDataDecoder rawValue of
+                Ok updateData ->
+                    let
+                        entry =
+                            UpdateEntry
+                                { timestamp = updateData.timestamp
+                                , message = updateData.message
+                                , modelBefore = model.lastModelAfter
+                                , modelAfter = updateData.model
+                                , effects = updateData.effects
+                                }
+
+                        newEntries =
+                            Array.push entry model.logEntries
+                    in
+                    ( { model
+                        | logEntries = newEntries
+                        , lastModelAfter = updateData.model
+                      }
+                    , Cmd.none
+                    )
+
+                Err e ->
+                    addErrorEntry lineNum (D.errorToString e) model
+
+        Ok "subscriptionChange" ->
+            case D.decodeValue LogParser.subscriptionChangeDataDecoder rawValue of
+                Ok subData ->
+                    let
+                        entry =
+                            SubscriptionChangeEntry
+                                { timestamp = subData.timestamp
+                                , started = subData.started
+                                , stopped = subData.stopped
+                                }
+
+                        newEntries =
+                            Array.push entry model.logEntries
+                    in
+                    ( { model | logEntries = newEntries }
+                    , Cmd.none
+                    )
+
+                Err e ->
+                    addErrorEntry lineNum (D.errorToString e) model
+
+        Ok unknownType ->
+            -- Skip unknown entry types silently
+            ( model, Cmd.none )
+
+        Err e ->
+            addErrorEntry lineNum (D.errorToString e) model
+
+
+{-| Add an error entry for a malformed line.
+-}
+addErrorEntry : Int -> String -> Model -> ( Model, Cmd Msg )
+addErrorEntry lineNum errorMsg model =
+    let
+        errorEntry =
+            ErrorEntry
+                { lineNumber = lineNum
+                , rawText = ""
+                , error = errorMsg
+                }
+
+        newEntries =
+            Array.push errorEntry model.logEntries
+    in
+    ( { model | logEntries = newEntries }
+    , Cmd.none
+    )
+
+
+{-| Select an entry and update the model accordingly.
+-}
+selectEntry : Int -> LogEntry -> Model -> ( Model, Cmd Msg )
+selectEntry index entry model =
+    let
+        -- Get model states for tree view and diff
+        ( maybeModelBefore, maybeModelAfter ) =
+            ( getModelBefore entry, getModelAfter entry )
+
+        -- Parse the after state for tree view
+        newTreeState =
+            maybeModelAfter
+                |> Maybe.map
+                    (\afterModel ->
+                        case TreeView.parseValue afterModel model.treeViewState of
+                            Ok state ->
+                                state
+
+                            Err _ ->
+                                TreeView.init
+                    )
+                |> Maybe.withDefault TreeView.init
+
+        -- Parse the before state for split view
+        newBeforeTreeState =
+            maybeModelBefore
+                |> Maybe.map
+                    (\beforeModel ->
+                        case TreeView.parseValue beforeModel model.beforeTreeViewState of
+                            Ok state ->
+                                state
+
+                            Err _ ->
+                                TreeView.init
+                    )
+                |> Maybe.withDefault TreeView.init
+
+        -- Compute diff
+        diffResult =
+            case ( maybeModelBefore, maybeModelAfter ) of
+                ( Just before, Just after ) ->
+                    Just (Diff.findChangedPaths before after)
+
+                _ ->
+                    Nothing
+
+        newChangedPaths =
+            diffResult
+                |> Maybe.map .changedPaths
+                |> Maybe.withDefault []
+
+        newChanges =
+            diffResult
+                |> Maybe.map .changes
+                |> Maybe.withDefault Dict.empty
+
+        -- Re-run search if there's an active query
+        newSearchResult =
+            if String.isEmpty model.searchQuery then
+                Search.emptyEntrySearchResult
+
+            else
+                searchLogEntry model.searchQuery entry
+
+        -- Get or create the view state for this message
+        existingViewState =
+            Dict.get index model.messageViewStates
+
+        messageViewState =
+            case existingViewState of
+                Just state ->
+                    state
+
+                Nothing ->
+                    if model.showChangedValues then
+                        messageViewStateWithChanges newChangedPaths
+
+                    else
+                        defaultMessageViewState
+
+        -- Update the messageViewStates dict with the current state
+        newMessageViewStates =
+            Dict.insert index messageViewState model.messageViewStates
+    in
+    ( { model
+        | selectedIndex = Just index
+        , treeViewState = newTreeState
+        , beforeTreeViewState = newBeforeTreeState
+        , changedPaths = newChangedPaths
+        , changes = newChanges
+        , messageViewStates = newMessageViewStates
+        , searchResult = newSearchResult
+        , currentMatchIndex =
+            if newSearchResult.totalMatchCount == 0 then
+                0
+
+            else
+                Basics.min model.currentMatchIndex (newSearchResult.totalMatchCount - 1)
+                    |> Basics.max 0
+        , filterExpandedPaths =
+            if String.isEmpty model.searchQuery then
+                model.filterExpandedPaths
+
+            else
+                Search.buildVisiblePaths newSearchResult.afterMatches
+      }
+    , Cmd.none
+    )
+
+
 {-| Handle incoming messages from JavaScript via ports.
-
-Decodes the message type and dispatches to the appropriate handler.
-
 -}
 handlePortMessage : E.Value -> Model -> ( Model, Cmd Msg )
 handlePortMessage value model =
@@ -1147,18 +1173,20 @@ handlePortMessage value model =
     case D.decodeValue typeDecoder value of
         Ok msgType ->
             case msgType of
-                "fileDialogResult" ->
-                    handleFileDialogResult value model
+                "openInput" ->
+                    handleOpenInputRequest value model
 
-                "fileReadResult" ->
-                    handleFileReadResult value model
+                "inputOpened" ->
+                    handleInputOpened value model
 
-                "fileListResult" ->
-                    -- Handle file list if needed in future
-                    ( model, Cmd.none )
+                "entryReceived" ->
+                    handleEntryReceivedPort value model
 
-                "error" ->
-                    handleErrorResult value model
+                "inputError" ->
+                    handleInputErrorPort value model
+
+                "inputClosed" ->
+                    update InputClosed model
 
                 _ ->
                     ( model, Cmd.none )
@@ -1169,80 +1197,85 @@ handlePortMessage value model =
             )
 
 
-handleFileDialogResult : E.Value -> Model -> ( Model, Cmd Msg )
-handleFileDialogResult value model =
+handleOpenInputRequest : E.Value -> Model -> ( Model, Cmd Msg )
+handleOpenInputRequest value model =
     let
         decoder =
-            D.field "payload"
-                (D.map3
-                    (\success filePath error ->
-                        { success = success
-                        , filePath = filePath
-                        , error = error
-                        }
-                    )
-                    (D.field "success" D.bool)
-                    (D.maybe (D.field "filePath" D.string))
-                    (D.maybe (D.field "error" D.string))
-                )
+            D.field "payload" (D.field "path" D.string)
     in
     case D.decodeValue decoder value of
-        Ok result ->
-            update (FileDialogResult result) model
+        Ok path ->
+            update (OpenInput path) model
 
         Err _ ->
-            ( { model
-                | loadingState = Error "Failed to decode file dialog result"
-              }
+            ( { model | errorMessage = Just "Failed to decode open input request" }
             , Cmd.none
             )
 
 
-handleFileReadResult : E.Value -> Model -> ( Model, Cmd Msg )
-handleFileReadResult value model =
+handleInputOpened : E.Value -> Model -> ( Model, Cmd Msg )
+handleInputOpened value model =
     let
         decoder =
             D.field "payload"
-                (D.map4
-                    (\success content path error ->
+                (D.map3
+                    (\success path error ->
                         { success = success
-                        , content = content
                         , path = path
                         , error = error
                         }
                     )
                     (D.field "success" D.bool)
-                    (D.maybe (D.field "content" D.string))
-                    (D.field "path" D.string)
+                    (D.maybe (D.field "path" D.string))
                     (D.maybe (D.field "error" D.string))
                 )
     in
     case D.decodeValue decoder value of
         Ok result ->
-            update (FileReadResult result) model
+            update (InputOpened result) model
 
         Err _ ->
-            ( { model
-                | loadingState = Error "Failed to decode file read result"
-              }
+            ( { model | errorMessage = Just "Failed to decode input opened result" }
             , Cmd.none
             )
 
 
-handleErrorResult : E.Value -> Model -> ( Model, Cmd Msg )
-handleErrorResult value model =
+handleEntryReceivedPort : E.Value -> Model -> ( Model, Cmd Msg )
+handleEntryReceivedPort value model =
+    let
+        decoder =
+            D.field "payload"
+                (D.map4
+                    (\lineNumber entry error rawText ->
+                        { lineNumber = lineNumber
+                        , entry = entry
+                        , error = error
+                        , rawText = rawText
+                        }
+                    )
+                    (D.field "lineNumber" D.int)
+                    (D.maybe (D.field "entry" D.value))
+                    (D.maybe (D.field "error" D.string))
+                    (D.maybe (D.field "rawText" D.string))
+                )
+    in
+    case D.decodeValue decoder value of
+        Ok payload ->
+            update (EntryReceived payload) model
+
+        Err _ ->
+            ( model, Cmd.none )
+
+
+handleInputErrorPort : E.Value -> Model -> ( Model, Cmd Msg )
+handleInputErrorPort value model =
     let
         decoder =
             D.field "payload" (D.field "error" D.string)
     in
     case D.decodeValue decoder value of
         Ok errorMsg ->
-            ( { model
-                | loadingState = Error errorMsg
-                , errorMessage = Just errorMsg
-              }
-            , Cmd.none
-            )
+            update (InputError errorMsg) model
 
         Err _ ->
             ( { model | errorMessage = Just "An unknown error occurred" }
@@ -1250,49 +1283,105 @@ handleErrorResult value model =
             )
 
 
-{-| Convert a ParseError to a user-friendly string message.
+
+-- HELPER FUNCTIONS FOR LOG ENTRIES
+
+
+{-| Get the model before state from a log entry.
 -}
-parseErrorToString : ParseError -> String
-parseErrorToString error =
-    case error of
-        EmptyFile ->
-            "The file is empty"
+getModelBefore : LogEntry -> Maybe D.Value
+getModelBefore entry =
+    case entry of
+        InitEntry _ ->
+            Nothing
 
-        MalformedEntry info ->
-            "Line "
-                ++ String.fromInt info.lineNumber
-                ++ ": "
-                ++ info.reason
-                ++ " — \""
-                ++ info.preview
-                ++ "\""
+        UpdateEntry data ->
+            Just data.modelBefore
 
-        NoValidEntries info ->
-            case info.firstError of
-                Just firstErr ->
-                    "No valid log entries found ("
-                        ++ String.fromInt info.malformedCount
-                        ++ " malformed). First error at line "
-                        ++ String.fromInt firstErr.lineNumber
-                        ++ ": "
-                        ++ firstErr.reason
+        SubscriptionChangeEntry _ ->
+            Nothing
 
-                Nothing ->
-                    "No valid log entries found in file"
+        ErrorEntry _ ->
+            Nothing
 
-        InvalidJson jsonError ->
-            "Invalid JSON format: " ++ jsonError
 
-        UnexpectedFormat message ->
-            "Unexpected file format: " ++ message
+{-| Get the model after state from a log entry.
+-}
+getModelAfter : LogEntry -> Maybe D.Value
+getModelAfter entry =
+    case entry of
+        InitEntry data ->
+            Just data.model
+
+        UpdateEntry data ->
+            Just data.modelAfter
+
+        SubscriptionChangeEntry _ ->
+            Nothing
+
+        ErrorEntry _ ->
+            Nothing
+
+
+{-| Get the effects from a log entry.
+-}
+getEffects : LogEntry -> Maybe (List Effect)
+getEffects entry =
+    case entry of
+        InitEntry data ->
+            Just data.effects
+
+        UpdateEntry data ->
+            Just data.effects
+
+        SubscriptionChangeEntry _ ->
+            Nothing
+
+        ErrorEntry _ ->
+            Nothing
+
+
+{-| Get the message payload from a log entry.
+-}
+getMessagePayload : LogEntry -> Maybe D.Value
+getMessagePayload entry =
+    case entry of
+        UpdateEntry data ->
+            Just data.message.payload
+
+        _ ->
+            Nothing
+
+
+{-| Search within a log entry.
+-}
+searchLogEntry : String -> LogEntry -> Search.EntrySearchResult
+searchLogEntry query entry =
+    case entry of
+        UpdateEntry data ->
+            Search.searchEntry query
+                { timestamp = data.timestamp
+                , message = data.message
+                , modelBefore = data.modelBefore
+                , modelAfter = data.modelAfter
+                , effects = data.effects
+                }
+
+        InitEntry data ->
+            -- Search init entries similarly
+            Search.searchEntry query
+                { timestamp = data.timestamp
+                , message = { name = "Init", payload = E.null }
+                , modelBefore = E.null
+                , modelAfter = data.model
+                , effects = data.effects
+                }
+
+        _ ->
+            Search.emptyEntrySearchResult
 
 
 {-| Get the path of the current search match for highlighting in tree views.
-
-Returns the path string for the current match, suitable for highlighting in
-the relevant tree view. For InMessageName and InEffectName matches, returns
-Nothing since those don't have tree paths.
-
 -}
 getCurrentMatchPath : Model -> Maybe String
 getCurrentMatchPath model =
@@ -1327,10 +1416,6 @@ matchLocationToPath location =
 
 
 {-| Collect all paths from a JSON value for expand all functionality.
-
-Recursively traverses the JSON structure and collects path strings for all
-container nodes (objects and arrays).
-
 -}
 collectAllPaths : D.Value -> Set String
 collectAllPaths value =
@@ -1343,10 +1428,8 @@ collectAllPathsHelper currentPath value =
         pathKey =
             String.join "." currentPath
     in
-    -- Try to decode as object
     case D.decodeValue (D.keyValuePairs D.value) value of
         Ok pairs ->
-            -- It's an object - add this path and recurse into children
             List.foldl
                 (\( key, childValue ) acc ->
                     Set.union acc (collectAllPathsHelper (currentPath ++ [ key ]) childValue)
@@ -1355,10 +1438,8 @@ collectAllPathsHelper currentPath value =
                 pairs
 
         Err _ ->
-            -- Try to decode as array
             case D.decodeValue (D.list D.value) value of
                 Ok items ->
-                    -- It's an array - add this path and recurse into children
                     List.foldl
                         (\( idx, childValue ) acc ->
                             Set.union acc (collectAllPathsHelper (currentPath ++ [ String.fromInt idx ]) childValue)
@@ -1367,7 +1448,6 @@ collectAllPathsHelper currentPath value =
                         (List.indexedMap Tuple.pair items)
 
                 Err _ ->
-                    -- It's a primitive - no path to add (only containers can be expanded)
                     Set.empty
 
 
@@ -1376,65 +1456,33 @@ collectAllPathsHelper currentPath value =
 
 
 {-| Main view function rendering the application layout.
-
-Uses a flex-based layout with:
-
-  - Fixed-width sidebar for message list
-  - Main content area that fills remaining space
-
-DaisyUI components are used for:
-
-  - Menu for message list
-  - Tabs for view mode switching
-
 -}
 view : Model -> Html Msg
 view model =
     div [ class "h-full w-full" ]
-        [ -- Main layout
-          div [ class "flex h-full w-full" ]
-            [ -- Sidebar panel with controlled width
-              div
+        [ div [ class "flex h-full w-full" ]
+            [ div
                 [ class "flex flex-col h-full overflow-hidden bg-base-200"
                 , style "width" (String.fromInt model.sidebarWidth ++ "px")
                 , style "flex-shrink" "0"
                 ]
                 [ viewSidebar model ]
-
-            -- Resize gutter
             , viewResizeGutter model
-
-            -- Main content panel fills remaining space
             , div
                 [ class "flex flex-col h-full overflow-hidden flex-1"
                 ]
                 [ viewMainContent model
                 ]
             ]
-
-        -- Error toast (rendered last to ensure it's on top)
         , viewErrorBanner model
         ]
 
 
 {-| Render a dismissible error toast at the top of the screen.
-
-Shows errors from either loadingState or errorMessage.
-Uses DaisyUI's toast component for positioning.
-
 -}
 viewErrorBanner : Model -> Html Msg
 viewErrorBanner model =
-    let
-        errorText =
-            case model.loadingState of
-                Error msg ->
-                    Just msg
-
-                _ ->
-                    model.errorMessage
-    in
-    case errorText of
+    case model.errorMessage of
         Just msg ->
             div
                 [ class "fixed top-4 left-1/2 -translate-x-1/2 z-[10000]" ]
@@ -1474,8 +1522,6 @@ viewResizeGutter model =
         []
 
 
-{-| Event handler for mouse down that prevents text selection during resize.
--}
 onMouseDown : msg -> Attribute msg
 onMouseDown msg =
     Html.Events.preventDefaultOn "mousedown"
@@ -1483,10 +1529,6 @@ onMouseDown msg =
 
 
 {-| Render the sidebar with message list.
-
-The sidebar is now a flex child of the split panel layout. Split.js manages the width,
-so we no longer need to set a hardcoded width style.
-
 -}
 viewSidebar : Model -> Html Msg
 viewSidebar model =
@@ -1495,7 +1537,7 @@ viewSidebar model =
             [ h2 [ class "font-semibold text-lg" ] [ text "Messages" ]
             , div [ class "flex flex-nowrap items-center gap-2 mt-1" ]
                 [ span [ class "text-sm text-base-content/60 whitespace-nowrap flex-none" ]
-                    [ text (String.fromInt (List.length model.logEntries) ++ " messages") ]
+                    [ text (String.fromInt (Array.length model.logEntries) ++ " messages") ]
                 , select
                     [ class "select select-bordered select-xs"
                     , style "width" "auto"
@@ -1519,17 +1561,6 @@ viewSidebar model =
                         ]
                         [ text "Oldest First" ]
                     ]
-                , if model.skippedEntries > 0 then
-                    div
-                        [ class "tooltip tooltip-right"
-                        , attribute "data-tip" (String.fromInt model.skippedEntries ++ " malformed entries skipped")
-                        ]
-                        [ span [ class "badge badge-warning badge-sm" ]
-                            [ text (String.fromInt model.skippedEntries ++ " skipped") ]
-                        ]
-
-                  else
-                    text ""
                 ]
             ]
         , div [ class "flex-1 overflow-y-auto overflow-x-hidden min-w-0" ]
@@ -1544,16 +1575,6 @@ viewSidebar model =
 
 
 {-| Render the main content area.
-
-Layout structure:
-  - View options bar (fixed at top)
-  - Scrollable container with:
-    - Effects panel (accordion, collapsed by default)
-    - State display
-
-Both effects and state are in the same scrollable container so users can
-scroll to see all content when either is expanded.
-
 -}
 viewMainContent : Model -> Html Msg
 viewMainContent model =
@@ -1604,15 +1625,6 @@ viewViewOptions model =
 
 
 {-| Render the search box with navigation controls.
-
-Layout: search input → x of y → up/down arrows → filter toggle (all on one line)
-
-Keyboard shortcuts supported:
-
-  - Enter: Navigate to next match
-  - Shift+Enter: Navigate to previous match
-  - Cmd/Ctrl+F: Focus search (handled globally in subscriptions)
-
 -}
 viewSearchBox : Model -> Html Msg
 viewSearchBox model =
@@ -1631,8 +1643,7 @@ viewSearchBox model =
                 model.currentMatchIndex + 1
     in
     div [ class "flex items-center gap-2" ]
-        [ -- Search input
-          input
+        [ input
             [ type_ "text"
             , id "search-input"
             , placeholder "Search... (⌘F)"
@@ -1642,8 +1653,6 @@ viewSearchBox model =
             , preventDefaultOn "keydown" searchKeyDecoder
             ]
             []
-
-        -- Match counter (x of y)
         , if String.isEmpty model.searchQuery then
             span [ class "text-sm text-base-content/60 w-14 text-center" ] [ text "" ]
 
@@ -1655,8 +1664,6 @@ viewSearchBox model =
                         ++ String.fromInt matchCount
                     )
                 ]
-
-        -- Up/down navigation arrows (horizontal layout)
         , div [ class "flex items-center" ]
             [ div [ class "tooltip tooltip-bottom", attribute "data-tip" "Previous match (Shift+Enter)" ]
                 [ button
@@ -1675,8 +1682,6 @@ viewSearchBox model =
                     [ text "▼" ]
                 ]
             ]
-
-        -- Filter toggle
         , label [ class "label cursor-pointer gap-2" ]
             [ span [ class "label-text text-sm" ] [ text "Filter" ]
             , input
@@ -1690,16 +1695,6 @@ viewSearchBox model =
         ]
 
 
-{-| Decoder for keyboard events in the search input.
-
-Handles:
-
-  - Enter: Navigate to next match
-  - Shift+Enter: Navigate to previous match
-
-Returns (Msg, Bool) where Bool indicates whether to prevent default behavior.
-
--}
 searchKeyDecoder : D.Decoder ( Msg, Bool )
 searchKeyDecoder =
     D.map2
@@ -1718,56 +1713,32 @@ searchKeyDecoder =
         (D.field "shiftKey" D.bool)
 
 
-{-| Render the state content area based on view mode.
-
-Shows a loading indicator when a file is being loaded, otherwise displays
-the appropriate state view based on selection.
-
-Note: This is now rendered inside a scrollable parent container, so it
-doesn't need its own overflow handling.
-
+{-| Render the state content area based on selection.
 -}
 viewStateContent : Model -> Html Msg
 viewStateContent model =
     div [ class "p-4" ]
-        [ case model.loadingState of
-            Loading ->
-                viewLoadingState
+        [ case model.selectedIndex of
+            Nothing ->
+                viewNoSelection model
 
-            _ ->
-                case model.selectedIndex of
+            Just index ->
+                case Array.get index model.logEntries of
+                    Just entry ->
+                        viewSelectedEntry model index entry
+
                     Nothing ->
                         viewNoSelection model
-
-                    Just _ ->
-                        viewSelectedState model
-        ]
-
-
-{-| Render loading state placeholder when a file is being loaded.
--}
-viewLoadingState : Html Msg
-viewLoadingState =
-    div [ class "h-full flex items-center justify-center" ]
-        [ div [ class "text-center" ]
-            [ span [ class "loading loading-spinner loading-lg text-primary" ] []
-            , p [ class "text-lg mt-4 text-base-content/80" ] [ text "Loading file..." ]
-            , p [ class "text-sm mt-2 text-base-content/60" ] [ text "Parsing log entries" ]
-            ]
         ]
 
 
 {-| Render placeholder when no message is selected.
-
-Shows different messages depending on whether log entries have been loaded.
-
 -}
 viewNoSelection : Model -> Html Msg
 viewNoSelection model =
     div [ class "h-full flex items-center justify-center" ]
         [ div [ class "text-center text-base-content/60" ]
-            (if List.isEmpty model.logEntries then
-                -- No file loaded yet
+            (if Array.isEmpty model.logEntries then
                 [ div [ class "text-5xl mb-4" ] [ text "📂" ]
                 , p [ class "text-lg font-medium" ] [ text "No file loaded" ]
                 , p [ class "text-sm mt-2" ] [ text "Click 'Open File' to load a TeaForge log file" ]
@@ -1779,7 +1750,6 @@ viewNoSelection model =
                 ]
 
              else
-                -- File loaded but no message selected
                 [ div [ class "text-5xl mb-4" ] [ text "👆" ]
                 , p [ class "text-lg font-medium" ] [ text "No message selected" ]
                 , p [ class "text-sm mt-2" ] [ text "Select a message from the sidebar to view its state" ]
@@ -1788,71 +1758,138 @@ viewNoSelection model =
         ]
 
 
-{-| Render the state view for the selected message.
-
-Shows the model state based on view options:
-  - If showPreviousState is true, shows before and after side by side
-  - If showPreviousState is false, shows only the after state
-  - If showChangedValues is true, highlights changes on the after panel
-
+{-| Render the selected entry based on its type.
 -}
-viewSelectedState : Model -> Html Msg
-viewSelectedState model =
+viewSelectedEntry : Model -> Int -> LogEntry -> Html Msg
+viewSelectedEntry model index entry =
+    case entry of
+        ErrorEntry data ->
+            viewErrorEntry data
+
+        InitEntry data ->
+            viewInitEntry model index data
+
+        UpdateEntry data ->
+            viewUpdateEntry model index data
+
+        SubscriptionChangeEntry data ->
+            viewSubscriptionEntry data
+
+
+{-| Render an error entry.
+-}
+viewErrorEntry : ErrorEntryData -> Html Msg
+viewErrorEntry data =
+    div [ class "alert alert-error" ]
+        [ i [ class "fa-solid fa-triangle-exclamation text-xl" ] []
+        , div []
+            [ div [ class "font-bold" ] [ text ("Parse error on line " ++ String.fromInt data.lineNumber) ]
+            , div [] [ text data.error ]
+            , if not (String.isEmpty data.rawText) then
+                div [ class "mt-2 font-mono text-sm opacity-70 truncate max-w-lg" ] [ text data.rawText ]
+
+              else
+                text ""
+            ]
+        ]
+
+
+{-| Render an init entry.
+-}
+viewInitEntry : Model -> Int -> InitEntryData -> Html Msg
+viewInitEntry model index data =
     let
-        -- Check if this is the first message (index 0)
+        viewState =
+            getMessageViewState model
+
+        currentMatchPath =
+            getCurrentMatchPath model
+    in
+    div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
+        [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
+            [ h3 [ class "font-semibold text-base" ] [ text "Initial State" ]
+            , viewCollapseExpandButtons CollapseAllAfter ExpandAllAfter
+            ]
+        , div [ class "flex-1 overflow-auto p-4" ]
+            [ TreeView.viewUnified
+                { onToggleExpand = AfterToggleExpand
+                , searchMatches = model.searchResult.afterPathsWithMatches
+                , currentMatchPath = currentMatchPath
+                }
+                data.model
+                viewState.afterExpandedPaths
+            ]
+        ]
+
+
+{-| Render an update entry.
+-}
+viewUpdateEntry : Model -> Int -> UpdateEntryData -> Html Msg
+viewUpdateEntry model index data =
+    let
         isFirstMessage =
-            model.selectedIndex == Just 0
+            index == 0
     in
     if model.showPreviousState then
-        viewSplitMode model isFirstMessage
+        viewSplitMode model index data isFirstMessage
 
     else
-        viewSingleStateMode model
+        viewSingleStateMode model index data
 
 
-{-| Render the single state view (after state only).
-
-When filter is active and there's a search query, shows only matching paths.
-When showChangedValues is true, highlights changes.
-Otherwise shows the full tree view.
-
+{-| Render a subscription change entry.
 -}
-viewSingleStateMode : Model -> Html Msg
-viewSingleStateMode model =
-    let
-        -- Get the selected entry's modelAfter for rendering
-        maybeAfterState =
-            model.selectedIndex
-                |> Maybe.andThen
-                    (\idx ->
-                        model.logEntries
-                            |> List.drop idx
-                            |> List.head
-                            |> Maybe.map .modelAfter
-                    )
+viewSubscriptionEntry : SubscriptionChangeData -> Html Msg
+viewSubscriptionEntry data =
+    div [ class "bg-base-100 rounded-lg border border-base-300 p-4" ]
+        [ h3 [ class "font-semibold text-base mb-4" ] [ text "Subscription Change" ]
+        , div [ class "grid grid-cols-2 gap-4" ]
+            [ div []
+                [ h4 [ class "font-medium text-success mb-2" ] [ text "Started" ]
+                , if List.isEmpty data.started then
+                    p [ class "text-sm text-base-content/60" ] [ text "None" ]
 
-        -- Should we show filtered view?
+                  else
+                    ul [ class "text-sm space-y-1" ]
+                        (List.map (\v -> li [] [ text (E.encode 0 v) ]) data.started)
+                ]
+            , div []
+                [ h4 [ class "font-medium text-error mb-2" ] [ text "Stopped" ]
+                , if List.isEmpty data.stopped then
+                    p [ class "text-sm text-base-content/60" ] [ text "None" ]
+
+                  else
+                    ul [ class "text-sm space-y-1" ]
+                        (List.map (\v -> li [] [ text (E.encode 0 v) ]) data.stopped)
+                ]
+            ]
+        ]
+
+
+{-| Render the single state view mode.
+-}
+viewSingleStateMode : Model -> Int -> UpdateEntryData -> Html Msg
+viewSingleStateMode model index data =
+    let
         showFiltered =
             model.filterActive && not (String.isEmpty (String.trim model.searchQuery))
 
-        -- Check if this is the first message
         isFirstMessage =
-            model.selectedIndex == Just 0
+            index == 0
 
         changeCount =
             List.length model.changedPaths
 
-        -- Get the current message's view state
         viewState =
             getMessageViewState model
+
+        currentMatchPath =
+            getCurrentMatchPath model
     in
     if showFiltered then
         let
             visiblePaths =
                 Search.buildVisiblePaths model.searchResult.afterMatches
-
-            currentMatchPath =
-                getCurrentMatchPath model
 
             filterConfig =
                 { visiblePaths = visiblePaths
@@ -1862,8 +1899,7 @@ viewSingleStateMode model =
                 }
         in
         div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
-            [ -- Header indicating filtered mode
-              div [ class "flex items-center justify-between px-4 py-2 border-b border-base-300 bg-base-200/50" ]
+            [ div [ class "flex items-center justify-between px-4 py-2 border-b border-base-300 bg-base-200/50" ]
                 [ div [ class "flex items-center gap-2" ]
                     [ span [ class "text-sm font-medium" ] [ text "Filtered View" ]
                     , span [ class "badge badge-info badge-sm" ]
@@ -1871,26 +1907,14 @@ viewSingleStateMode model =
                     ]
                 , viewCollapseExpandButtons CollapseAllFilter ExpandAllFilter
                 ]
-
-            -- Content area
             , div [ class "flex-1 overflow-auto p-4" ]
-                [ case maybeAfterState of
-                    Just afterJson ->
-                        TreeView.viewFiltered filterConfig afterJson model.filterExpandedPaths
-
-                    Nothing ->
-                        TreeView.viewEmpty
-                ]
+                [ TreeView.viewFiltered filterConfig data.modelAfter model.filterExpandedPaths ]
             ]
 
     else if model.showChangedValues && not isFirstMessage then
-        -- Show state with diff highlighting
         let
             treeViewChanges =
                 Dict.map (\_ change -> diffChangeToTreeViewChange change) model.changes
-
-            currentMatchPath =
-                getCurrentMatchPath model
 
             diffConfig =
                 { changedPaths = model.changedPaths
@@ -1902,8 +1926,7 @@ viewSingleStateMode model =
                 }
         in
         div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
-            [ -- Header with change count
-              div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
+            [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
                 [ h3 [ class "font-semibold text-base" ] [ text "Current State" ]
                 , div [ class "flex items-center gap-2" ]
                     [ if changeCount > 0 then
@@ -1916,97 +1939,46 @@ viewSingleStateMode model =
                     , viewCollapseExpandButtons CollapseAllAfter ExpandAllAfter
                     ]
                 ]
-
-            -- Content area
             , div [ class "flex-1 overflow-auto p-4" ]
-                [ case maybeAfterState of
-                    Just afterJson ->
-                        TreeView.viewDiff diffConfig afterJson viewState.afterExpandedPaths
-
-                    Nothing ->
-                        TreeView.viewEmpty
-                ]
-
-            -- Legend
+                [ TreeView.viewDiff diffConfig data.modelAfter viewState.afterExpandedPaths ]
             , viewDiffLegend
             ]
 
     else
-        let
-            currentMatchPath =
-                getCurrentMatchPath model
-        in
         div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
-            [ -- Header
-              div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
+            [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
                 [ h3 [ class "font-semibold text-base" ] [ text "Current State" ]
                 , viewCollapseExpandButtons CollapseAllAfter ExpandAllAfter
                 ]
-
-            -- Content area
             , div [ class "flex-1 overflow-auto p-4" ]
-                [ case maybeAfterState of
-                    Just afterJson ->
-                        TreeView.viewUnified
-                            { onToggleExpand = AfterToggleExpand
-                            , searchMatches = model.searchResult.afterPathsWithMatches
-                            , currentMatchPath = currentMatchPath
-                            }
-                            afterJson
-                            viewState.afterExpandedPaths
-
-                    Nothing ->
-                        TreeView.viewEmpty
+                [ TreeView.viewUnified
+                    { onToggleExpand = AfterToggleExpand
+                    , searchMatches = model.searchResult.afterPathsWithMatches
+                    , currentMatchPath = currentMatchPath
+                    }
+                    data.modelAfter
+                    viewState.afterExpandedPaths
                 ]
             ]
 
 
 {-| Render the split view mode with before and after states side by side.
-
-The before panel shows the model state before processing the selected message.
-The after panel shows the model state after processing.
-When showChangedValues is true, the after panel highlights changes.
-When filterActive is true and there's a search query, both panels show only matching fields.
-The first message has no "before" state and shows a placeholder.
-
 -}
-viewSplitMode : Model -> Bool -> Html Msg
-viewSplitMode model isFirstMessage =
+viewSplitMode : Model -> Int -> UpdateEntryData -> Bool -> Html Msg
+viewSplitMode model index data isFirstMessage =
     let
-        -- Get the selected entry
-        maybeEntry =
-            model.selectedIndex
-                |> Maybe.andThen
-                    (\idx ->
-                        model.logEntries
-                            |> List.drop idx
-                            |> List.head
-                    )
-
-        -- Get the selected entry's modelAfter for diff rendering
-        maybeAfterState =
-            maybeEntry |> Maybe.map .modelAfter
-
-        -- Get the selected entry's modelBefore for before panel
-        maybeBeforeState =
-            maybeEntry |> Maybe.map .modelBefore
-
         changeCount =
             List.length model.changedPaths
 
-        -- Whether to show diff highlighting on the after panel
         showDiffHighlighting =
             model.showChangedValues && not isFirstMessage
 
-        -- Whether to show filtered view
         showFiltered =
             model.filterActive && not (String.isEmpty (String.trim model.searchQuery))
 
-        -- Get the current message's view state
         viewState =
             getMessageViewState model
 
-        -- Convert Diff.Change to TreeView.Change for the after panel
         treeViewChanges =
             Dict.map (\_ change -> diffChangeToTreeViewChange change) model.changes
 
@@ -2022,7 +1994,6 @@ viewSplitMode model isFirstMessage =
             , currentMatchPath = currentMatchPath
             }
 
-        -- Config for the before diff view (shows removed items highlighted)
         beforeDiffConfig =
             { changedPaths = model.changedPaths
             , changes = treeViewChanges
@@ -2031,7 +2002,6 @@ viewSplitMode model isFirstMessage =
             , currentMatchPath = currentMatchPath
             }
 
-        -- Filter config for filtered view (after model)
         visiblePathsAfter =
             Search.buildVisiblePaths model.searchResult.afterMatches
 
@@ -2042,7 +2012,6 @@ viewSplitMode model isFirstMessage =
             , onToggleExpand = FilterToggleExpand
             }
 
-        -- Filter config for before model
         visiblePathsBefore =
             Search.buildVisiblePaths model.searchResult.beforeMatches
 
@@ -2056,7 +2025,6 @@ viewSplitMode model isFirstMessage =
         matchCount =
             model.searchResult.totalMatchCount
 
-        -- Unified config for non-diff views
         unifiedConfigBefore =
             { onToggleExpand = BeforeToggleExpand
             , searchMatches = model.searchResult.beforePathsWithMatches
@@ -2094,29 +2062,13 @@ viewSplitMode model isFirstMessage =
                         viewInitialStateMessage
 
                       else if showFiltered then
-                        case maybeBeforeState of
-                            Just beforeJson ->
-                                TreeView.viewFiltered filterConfigBefore beforeJson model.filterExpandedPaths
-
-                            Nothing ->
-                                TreeView.viewEmpty
+                        TreeView.viewFiltered filterConfigBefore data.modelBefore model.filterExpandedPaths
 
                       else if showDiffHighlighting then
-                        -- Show diff highlighting on the before panel (removed items highlighted)
-                        case maybeBeforeState of
-                            Just beforeJson ->
-                                TreeView.viewDiffBefore beforeDiffConfig beforeJson viewState.beforeExpandedPaths
-
-                            Nothing ->
-                                TreeView.viewEmpty
+                        TreeView.viewDiffBefore beforeDiffConfig data.modelBefore viewState.beforeExpandedPaths
 
                       else
-                        case maybeBeforeState of
-                            Just beforeJson ->
-                                TreeView.viewUnified unifiedConfigBefore beforeJson viewState.beforeExpandedPaths
-
-                            Nothing ->
-                                TreeView.viewEmpty
+                        TreeView.viewUnified unifiedConfigBefore data.modelBefore viewState.beforeExpandedPaths
                     ]
                 ]
 
@@ -2148,33 +2100,16 @@ viewSplitMode model isFirstMessage =
                     ]
                 , div [ class "flex-1 overflow-auto p-4" ]
                     [ if showFiltered then
-                        case maybeAfterState of
-                            Just afterJson ->
-                                TreeView.viewFiltered filterConfigAfter afterJson model.filterExpandedPaths
-
-                            Nothing ->
-                                TreeView.viewEmpty
+                        TreeView.viewFiltered filterConfigAfter data.modelAfter model.filterExpandedPaths
 
                       else if showDiffHighlighting then
-                        case maybeAfterState of
-                            Just afterJson ->
-                                TreeView.viewDiff diffConfig afterJson viewState.afterExpandedPaths
-
-                            Nothing ->
-                                TreeView.viewEmpty
+                        TreeView.viewDiff diffConfig data.modelAfter viewState.afterExpandedPaths
 
                       else
-                        case maybeAfterState of
-                            Just afterJson ->
-                                TreeView.viewUnified unifiedConfigAfter afterJson viewState.afterExpandedPaths
-
-                            Nothing ->
-                                TreeView.viewEmpty
+                        TreeView.viewUnified unifiedConfigAfter data.modelAfter viewState.afterExpandedPaths
                     ]
                 ]
             ]
-
-        -- Legend (only shown when diff highlighting is active and not filtering)
         , if showDiffHighlighting && not showFiltered then
             viewDiffLegend
 
@@ -2183,8 +2118,6 @@ viewSplitMode model isFirstMessage =
         ]
 
 
-{-| Render a message for the initial state (first message has no "before" state).
--}
 viewInitialStateMessage : Html Msg
 viewInitialStateMessage =
     div [ class "flex items-center justify-center h-full" ]
@@ -2196,8 +2129,6 @@ viewInitialStateMessage =
         ]
 
 
-{-| Render collapse/expand all buttons for tree panel headers.
--}
 viewCollapseExpandButtons : Msg -> Msg -> Html Msg
 viewCollapseExpandButtons collapseMsg expandMsg =
     div [ class "flex items-center gap-1" ]
@@ -2218,8 +2149,6 @@ viewCollapseExpandButtons collapseMsg expandMsg =
         ]
 
 
-{-| Render the diff legend showing what each color means.
--}
 viewDiffLegend : Html Msg
 viewDiffLegend =
     div [ class "flex items-center gap-4 px-4 py-2 border-t border-base-300 bg-base-200/30 text-xs rounded-b-lg" ]
@@ -2238,8 +2167,6 @@ viewDiffLegend =
         ]
 
 
-{-| Convert a Diff.Change to TreeView.Change.
--}
 diffChangeToTreeViewChange : Diff.Change -> TreeView.Change
 diffChangeToTreeViewChange change =
     case change of
@@ -2257,13 +2184,6 @@ diffChangeToTreeViewChange change =
 
 
 {-| Render the message details panel section.
-
-Displays the selected message's type name and payload data. The payload
-is rendered using the same tree renderer as effects and state views.
-
-This panel is positioned at the top of the main content area, below the
-view options toolbar and above the effects panel.
-
 -}
 viewMessageDetailsPanel : Model -> Html Msg
 viewMessageDetailsPanel model =
@@ -2272,67 +2192,62 @@ viewMessageDetailsPanel model =
             text ""
 
         Just index ->
-            let
-                maybeEntry =
-                    model.logEntries
-                        |> List.drop index
-                        |> List.head
-            in
-            case maybeEntry of
+            case Array.get index model.logEntries of
                 Nothing ->
                     text ""
 
                 Just entry ->
-                    let
-                        viewState =
-                            getMessageViewState model
+                    case entry of
+                        UpdateEntry data ->
+                            viewMessageDetails model data
 
-                        currentMatchPath =
-                            getCurrentMatchPath model
+                        _ ->
+                            text ""
 
-                        config : TreeView.UnifiedConfig Msg
-                        config =
-                            { onToggleExpand = PayloadToggleExpand
-                            , searchMatches = model.searchResult.payloadPathsWithMatches
-                            , currentMatchPath = currentMatchPath
-                            }
 
-                        -- Highlight message name if it matches the search
-                        messageNameHighlight =
-                            if model.searchResult.messageNameMatches then
-                                " search-match"
+viewMessageDetails : Model -> UpdateEntryData -> Html Msg
+viewMessageDetails model data =
+    let
+        viewState =
+            getMessageViewState model
 
-                            else
-                                ""
-                    in
-                    div [ class "mx-4 mt-4" ]
-                        [ div [ class "bg-base-200 rounded-lg border border-base-300 overflow-hidden" ]
-                            [ div [ class "flex items-center justify-between px-3 py-2 border-b border-base-300" ]
-                                [ div [ class "flex items-center gap-2" ]
-                                    [ span [ class "text-sm font-medium text-base-content/60" ] [ text "Message" ]
-                                    , span
-                                        [ id "message-name"
-                                        , class ("font-mono font-medium" ++ messageNameHighlight)
-                                        ]
-                                        [ text entry.message.name ]
-                                    ]
-                                , viewCollapseExpandButtons CollapseAllPayload ExpandAllPayload
-                                ]
-                            , div [ class "p-3" ]
-                                [ TreeView.viewUnified config entry.message.payload viewState.payloadExpandedPaths ]
-                            ]
+        currentMatchPath =
+            getCurrentMatchPath model
+
+        config : TreeView.UnifiedConfig Msg
+        config =
+            { onToggleExpand = PayloadToggleExpand
+            , searchMatches = model.searchResult.payloadPathsWithMatches
+            , currentMatchPath = currentMatchPath
+            }
+
+        messageNameHighlight =
+            if model.searchResult.messageNameMatches then
+                " search-match"
+
+            else
+                ""
+    in
+    div [ class "mx-4 mt-4" ]
+        [ div [ class "bg-base-200 rounded-lg border border-base-300 overflow-hidden" ]
+            [ div [ class "flex items-center justify-between px-3 py-2 border-b border-base-300" ]
+                [ div [ class "flex items-center gap-2" ]
+                    [ span [ class "text-sm font-medium text-base-content/60" ] [ text "Message" ]
+                    , span
+                        [ id "message-name"
+                        , class ("font-mono font-medium" ++ messageNameHighlight)
                         ]
+                        [ text data.message.name ]
+                    ]
+                , viewCollapseExpandButtons CollapseAllPayload ExpandAllPayload
+                ]
+            , div [ class "p-3" ]
+                [ TreeView.viewUnified config data.message.payload viewState.payloadExpandedPaths ]
+            ]
+        ]
 
 
 {-| Render the effects panel section.
-
-Displays the list of effects (commands) produced by the selected message's
-update function. Effects are shown in a collapsible accordion panel with
-their names and associated data.
-
-This panel is positioned above the state display so users can see both
-the effects and state simultaneously when the panel is expanded.
-
 -}
 viewEffectsPanel : Model -> Html Msg
 viewEffectsPanel model =
@@ -2340,10 +2255,8 @@ viewEffectsPanel model =
         selectedEffects =
             case model.selectedIndex of
                 Just index ->
-                    model.logEntries
-                        |> List.drop index
-                        |> List.head
-                        |> Maybe.map .effects
+                    Array.get index model.logEntries
+                        |> Maybe.andThen getEffects
                         |> Maybe.withDefault []
 
                 Nothing ->
@@ -2352,7 +2265,6 @@ viewEffectsPanel model =
         effectCount =
             List.length selectedEffects
 
-        -- Get the effect expanded paths from the current message's view state
         viewState =
             getMessageViewState model
     in
@@ -2375,8 +2287,6 @@ viewEffectsPanel model =
         ]
 
 
-{-| Render the list of effects or an empty state message.
--}
 viewEffectsList : Model -> Dict Int (Set String) -> List Effect -> Html Msg
 viewEffectsList model effectExpandedPaths effects =
     if List.isEmpty effects then
@@ -2388,8 +2298,6 @@ viewEffectsList model effectExpandedPaths effects =
             (List.indexedMap (viewEffectItem model effectExpandedPaths) effects)
 
 
-{-| Render a single effect item with its name and data using TreeView.
--}
 viewEffectItem : Model -> Dict Int (Set String) -> Int -> Effect -> Html Msg
 viewEffectItem model effectExpandedPaths index effect =
     let
@@ -2397,7 +2305,6 @@ viewEffectItem model effectExpandedPaths index effect =
             Dict.get index effectExpandedPaths
                 |> Maybe.withDefault (Set.singleton "")
 
-        -- Get search matches for this effect's data
         effectDataMatches =
             Dict.get index model.searchResult.effectDataPathsWithMatches
                 |> Maybe.withDefault Set.empty
@@ -2412,7 +2319,6 @@ viewEffectItem model effectExpandedPaths index effect =
             , currentMatchPath = currentMatchPath
             }
 
-        -- Highlight effect name if it matches the search
         effectNameMatches =
             Set.member index model.searchResult.effectNameMatches
 
@@ -2441,17 +2347,6 @@ viewEffectItem model effectExpandedPaths index effect =
         ]
 
 
-{-| Convert a MatchLocation to an element ID for scrolling.
-
-Each section uses a different prefix to create unique element IDs:
-  - Message name: "message-name"
-  - Message payload: "payload-tree-node-{path}"
-  - Effect name: "effect-{index}-name"
-  - Effect data: "effect-{index}-tree-node-{path}"
-  - Model before: "before-tree-node-{path}"
-  - Model after: "tree-node-{path}" (default, for backward compatibility)
-
--}
 matchLocationToElementId : Search.MatchLocation -> String
 matchLocationToElementId location =
     case location of
@@ -2478,18 +2373,6 @@ matchLocationToElementId location =
 -- SUBSCRIPTIONS
 
 
-{-| Application subscriptions.
-
-Subscribes to:
-
-  - Incoming port for JavaScript messages
-  - Global keyboard events for shortcuts:
-      - Cmd/Ctrl+F: Focus search input
-      - ArrowUp/ArrowDown: Navigate message list
-
-Note: We use preventDefaultOn to prevent browser's default behaviors.
-
--}
 subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
@@ -2506,34 +2389,21 @@ subscriptions model =
         ]
 
 
-{-| Decoder for global keyboard shortcuts.
-
-Handles:
-
-  - Cmd/Ctrl+F: Focus the search input
-  - ArrowUp: Select previous message in list (when not in input)
-  - ArrowDown: Select next message in list (when not in input)
-
--}
 keyboardShortcutDecoder : D.Decoder Msg
 keyboardShortcutDecoder =
     D.map4
         (\key metaKey ctrlKey tagName ->
             let
-                -- Don't handle arrow keys when focused on input elements
                 isInputElement =
                     tagName == "INPUT" || tagName == "TEXTAREA" || tagName == "SELECT"
             in
-            -- Cmd/Ctrl+F: Focus search input
             if key == "f" && (metaKey || ctrlKey) then
                 FocusSearch
 
             else if key == "ArrowDown" && not isInputElement then
-                -- Navigate down the list (to older messages at higher indices)
                 SelectNextMessage
 
             else if key == "ArrowUp" && not isInputElement then
-                -- Navigate up the list (to newer messages at lower indices)
                 SelectPreviousMessage
 
             else

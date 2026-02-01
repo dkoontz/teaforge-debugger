@@ -1,10 +1,16 @@
 module Types exposing
-    ( LogEntry
+    ( LogEntry(..)
+    , InitEntryData
+    , UpdateEntryData
+    , SubscriptionChangeData
+    , ErrorEntryData
     , MessageData
     , Effect
-    , LoadingState(..)
+    , InputSource
     , TreePath
     , DisplayOrder(..)
+    , getTimestamp
+    , getMessageName
     )
 
 {-| Core data types for the TeaForge Debugger application.
@@ -19,16 +25,56 @@ import Json.Decode as D
 
 {-| A single log entry from a TeaForge application log file.
 
-Each entry represents one message processed by the TEA update function,
-including the state before and after processing, and any effects produced.
+Each entry is one of:
+
+  - `InitEntry` - Initial model and bootstrap effects from init()
+  - `UpdateEntry` - Message processing result with before/after model
+  - `SubscriptionChangeEntry` - Subscription lifecycle events
+  - `ErrorEntry` - A malformed entry that couldn't be parsed
 
 -}
-type alias LogEntry =
+type LogEntry
+    = InitEntry InitEntryData
+    | UpdateEntry UpdateEntryData
+    | SubscriptionChangeEntry SubscriptionChangeData
+    | ErrorEntry ErrorEntryData
+
+
+{-| Data for an init entry.
+-}
+type alias InitEntryData =
+    { timestamp : Int
+    , model : D.Value
+    , effects : List Effect
+    }
+
+
+{-| Data for an update entry.
+-}
+type alias UpdateEntryData =
     { timestamp : Int
     , message : MessageData
     , modelBefore : D.Value
     , modelAfter : D.Value
     , effects : List Effect
+    }
+
+
+{-| Data for a subscription change entry.
+-}
+type alias SubscriptionChangeData =
+    { timestamp : Int
+    , started : List D.Value
+    , stopped : List D.Value
+    }
+
+
+{-| Data for an error entry (malformed line).
+-}
+type alias ErrorEntryData =
+    { lineNumber : Int
+    , rawText : String
+    , error : String
     }
 
 
@@ -55,19 +101,12 @@ type alias Effect =
     }
 
 
-{-| Represents the current loading state of the application.
-
-  - `Idle`: No file has been loaded yet
-  - `Loading`: A file is currently being loaded
-  - `Loaded`: A file has been successfully loaded
-  - `Error`: An error occurred during loading
-
+{-| Represents an active input source for log entries.
 -}
-type LoadingState
-    = Idle
-    | Loading
-    | Loaded
-    | Error String
+type alias InputSource =
+    { path : String
+    , label : String
+    }
 
 
 {-| A path through a tree structure, used for navigation and search results.
@@ -93,3 +132,39 @@ correspond to visual direction (down/up) regardless of temporal order.
 type DisplayOrder
     = Chronological
     | ReverseChronological
+
+
+{-| Get the timestamp from a log entry, if available.
+-}
+getTimestamp : LogEntry -> Maybe Int
+getTimestamp entry =
+    case entry of
+        InitEntry data ->
+            Just data.timestamp
+
+        UpdateEntry data ->
+            Just data.timestamp
+
+        SubscriptionChangeEntry data ->
+            Just data.timestamp
+
+        ErrorEntry _ ->
+            Nothing
+
+
+{-| Get a display name for the entry (message name or entry type).
+-}
+getMessageName : LogEntry -> String
+getMessageName entry =
+    case entry of
+        InitEntry _ ->
+            "Init"
+
+        UpdateEntry data ->
+            data.message.name
+
+        SubscriptionChangeEntry _ ->
+            "Subscription Change"
+
+        ErrorEntry data ->
+            "Parse Error (line " ++ String.fromInt data.lineNumber ++ ")"

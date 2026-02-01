@@ -37,7 +37,22 @@ import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
 import Set exposing (Set)
-import Types exposing (Effect, LogEntry, TreePath)
+import Types exposing (Effect, MessageData, TreePath)
+
+
+{-| Input record for searchEntry function.
+
+This record provides the fields needed to search a log entry.
+It's separate from LogEntry to allow flexibility in how entries are searched.
+
+-}
+type alias SearchableEntry =
+    { timestamp : Int
+    , message : MessageData
+    , modelBefore : D.Value
+    , modelAfter : D.Value
+    , effects : List Effect
+    }
 
 
 {-| Result of searching a JSON state tree.
@@ -157,7 +172,7 @@ search query jsonValue =
         }
 
 
-{-| Search all fields of a LogEntry for the query string.
+{-| Search all fields of a log entry for the query string.
 
 Searches across:
 
@@ -170,7 +185,7 @@ Searches across:
 Returns structured results with matches organized by section.
 
 -}
-searchEntry : String -> LogEntry -> EntrySearchResult
+searchEntry : String -> SearchableEntry -> EntrySearchResult
 searchEntry query entry =
     if String.isEmpty (String.trim query) then
         emptyEntrySearchResult

@@ -2,8 +2,7 @@ port module Ports exposing
     ( incoming
     , outgoing
     , openFileDialog
-    , readFile
-    , listFiles
+    , openInput
     , scrollIntoView
     , focusElement
     , saveSidebarWidth
@@ -17,15 +16,15 @@ All messages are sent as JSON Values with a type discriminator for simpler archi
 ## Outgoing Commands (Elm -> JavaScript)
 
   - `openFileDialog`: Request native file dialog
-  - `readFile`: Read contents of a file
-  - `listFiles`: List files in a directory
+  - `openInput`: Open an input source for streaming entries
 
 ## Incoming Responses (JavaScript -> Elm)
 
-  - `fileDialogResult`: Result of file dialog
-  - `fileReadResult`: Contents of a file
-  - `fileListResult`: List of files
-  - `error`: Error response
+  - `openInput`: Signal to open an input source (from dialog or menu)
+  - `inputOpened`: Result of opening an input source
+  - `entryReceived`: A log entry was received
+  - `inputError`: An error occurred with the input source
+  - `inputClosed`: The input source stream finished
 
 -}
 
@@ -54,8 +53,10 @@ port incoming : (E.Value -> msg) -> Sub msg
 
 {-| Request the native file dialog to open a TeaForge log file.
 
+This now triggers the streaming flow: after dialog selection,
+JS will send an `openInput` message back to Elm.
+
 Sends: `{ type: "openFileDialog", payload: null }`
-Expects: `{ type: "fileDialogResult", payload: { success: bool, filePath: string, error: string } }`
 
 -}
 openFileDialog : Cmd msg
@@ -68,37 +69,18 @@ openFileDialog =
         )
 
 
-{-| Request to read the contents of a file at the given path.
+{-| Request to open an input source for streaming log entries.
 
-Sends: `{ type: "readFile", payload: { path: string } }`
-Expects: `{ type: "fileReadResult", payload: { success: bool, content: string, path: string, error: string } }`
-
--}
-readFile : String -> Cmd msg
-readFile path =
-    outgoing
-        (E.object
-            [ ( "type", E.string "readFile" )
-            , ( "payload"
-              , E.object
-                    [ ( "path", E.string path )
-                    ]
-              )
-            ]
-        )
-
-
-{-| Request to list files in a directory.
-
-Sends: `{ type: "listFiles", payload: { path: string } }`
-Expects: `{ type: "fileListResult", payload: { success: bool, files: [string], path: string, error: string } }`
+Sends: `{ type: "openInput", payload: { path: string } }`
+Expects: `{ type: "inputOpened", payload: { success: bool, path: string, error: string } }`
+Then receives: `{ type: "entryReceived", payload: { lineNumber: int, entry?: value, error?: string, rawText?: string } }`
 
 -}
-listFiles : String -> Cmd msg
-listFiles path =
+openInput : String -> Cmd msg
+openInput path =
     outgoing
         (E.object
-            [ ( "type", E.string "listFiles" )
+            [ ( "type", E.string "openInput" )
             , ( "payload"
               , E.object
                     [ ( "path", E.string path )

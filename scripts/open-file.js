@@ -4,8 +4,7 @@
  *
  * Usage: node scripts/open-file.js <file-path>
  *
- * Reads the file content and sends it to the Elm app via the sendToElm function
- * exposed on the window object.
+ * Sends an openInput message to trigger streaming file loading via the main process.
  */
 
 const fs = require('fs');
@@ -35,45 +34,6 @@ async function main() {
             ok: false,
             error: { message: `File not found: ${absolutePath}` }
         }));
-        process.exit(1);
-    }
-
-    // Check file size - V8 has a ~512MB string limit, we'll use 500MB as our limit
-    const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
-    const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(1);
-    if (stats.size > MAX_FILE_SIZE) {
-        console.error(JSON.stringify({
-            ok: false,
-            error: {
-                message: `File too large: ${fileSizeMB} MB exceeds the 500 MB limit. Consider splitting the log file into smaller chunks.`,
-                code: 'FILE_TOO_LARGE',
-                size: stats.size
-            }
-        }));
-        process.exit(1);
-    }
-
-    // Read file content
-    let content;
-    try {
-        content = fs.readFileSync(absolutePath, 'utf-8');
-    } catch (err) {
-        // Check for V8 string length error
-        if (err.message && err.message.includes('string longer than')) {
-            console.error(JSON.stringify({
-                ok: false,
-                error: {
-                    message: `File too large: ${fileSizeMB} MB exceeds JavaScript's string size limit. Consider splitting the log file into smaller chunks.`,
-                    code: 'FILE_TOO_LARGE',
-                    size: stats.size
-                }
-            }));
-        } else {
-            console.error(JSON.stringify({
-                ok: false,
-                error: { message: `Failed to read file: ${err.message}` }
-            }));
-        }
         process.exit(1);
     }
 
@@ -110,7 +70,7 @@ async function main() {
         process.exit(1);
     }
 
-    // Connect to browser and send file to Elm
+    // Connect to browser and send openInput message to Elm
     let browser;
     try {
         browser = await chromium.connectOverCDP(wsUrl);
@@ -127,45 +87,30 @@ async function main() {
 
         const page = pages[0];
 
-        // Send file content to Elm via sendToElm
-        await page.evaluate(({ content, filePath }) => {
+        // Send openInput message to Elm to trigger streaming file load
+        await page.evaluate(({ filePath }) => {
             if (typeof window.sendToElm === 'function') {
                 window.sendToElm({
-                    type: 'fileReadResult',
+                    type: 'openInput',
                     payload: {
-                        success: true,
-                        content: content,
                         path: filePath
                     }
                 });
             } else {
                 throw new Error('sendToElm not found on window');
             }
-        }, { content, filePath: absolutePath });
+        }, { filePath: absolutePath });
 
         console.log(JSON.stringify({
             ok: true,
-            data: { path: absolutePath, size: content.length }
+            data: { path: absolutePath, size: stats.size }
         }));
 
     } catch (err) {
-        // Check for V8 string length error (can happen during IPC/evaluate)
-        const fileSizeMB = (content.length / (1024 * 1024)).toFixed(1);
-        if (err.message && err.message.includes('string longer than')) {
-            console.error(JSON.stringify({
-                ok: false,
-                error: {
-                    message: `File too large: ${fileSizeMB} MB exceeds JavaScript's string size limit. Consider splitting the log file into smaller chunks.`,
-                    code: 'FILE_TOO_LARGE',
-                    size: content.length
-                }
-            }));
-        } else {
-            console.error(JSON.stringify({
-                ok: false,
-                error: { message: err.message }
-            }));
-        }
+        console.error(JSON.stringify({
+            ok: false,
+            error: { message: err.message }
+        }));
         process.exit(1);
     } finally {
         if (browser) {

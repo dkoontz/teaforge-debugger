@@ -304,7 +304,7 @@ viewUnifiedRootChildren : UnifiedConfig msg -> Set String -> D.Value -> Html msg
 viewUnifiedRootChildren config expandedPaths jsonValue =
     let
         keys =
-            getObjectKeys jsonValue
+            getObjectKeysWithoutType jsonValue
     in
     div [ class "pl-2" ]
         (List.map
@@ -350,10 +350,13 @@ viewUnifiedObject config expandedPaths currentPath jsonValue =
             Set.member pathKey expandedPaths || pathKey == ""
 
         keys =
-            getObjectKeys jsonValue
+            getObjectKeysWithoutType jsonValue
 
-        keyCount =
-            List.length keys
+        hasChildren =
+            not (List.isEmpty keys)
+
+        typeAnnotation =
+            getTypeAnnotation jsonValue
 
         label =
             if List.isEmpty currentPath then
@@ -367,27 +370,48 @@ viewUnifiedObject config expandedPaths currentPath jsonValue =
 
         elementId =
             pathToElementId pathKey
+
+        labelParts =
+            case typeAnnotation of
+                Just typeName ->
+                    [ span [ class "text-primary" ] [ text label ]
+                    , span [ class "text-base-content/40" ] [ text " : " ]
+                    , span [ class "text-info" ] [ text typeName ]
+                    ]
+
+                Nothing ->
+                    [ span [ class "text-primary" ] [ text label ] ]
+
+        arrowAndInteraction =
+            if hasChildren then
+                ( [ span [ class "text-base-content/40 w-4" ]
+                        [ text
+                            (if isExpanded then
+                                "▼"
+
+                             else
+                                "▶"
+                            )
+                        ]
+                  ]
+                , [ class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
+                  , onClick (config.onToggleExpand currentPath)
+                  ]
+                )
+
+            else
+                ( [ span [ class "text-base-content/40 w-4" ] [ text "" ] ]
+                , [ class ("inline-flex items-center gap-1 rounded px-1 py-0.5" ++ highlightClass) ]
+                )
+
+        ( arrowPart, interactionAttrs ) =
+            arrowAndInteraction
     in
     div [ class "tree-node pl-2" ]
         [ div
-            [ id elementId
-            , class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-            , onClick (config.onToggleExpand currentPath)
-            ]
-            [ span [ class "text-base-content/40 w-4" ]
-                [ text
-                    (if isExpanded then
-                        "▼"
-
-                     else
-                        "▶"
-                    )
-                ]
-            , span [ class "text-primary" ] [ text label ]
-            , span [ class "text-base-content/40" ]
-                [ text (" {" ++ String.fromInt keyCount ++ "}") ]
-            ]
-        , if isExpanded then
+            ([ id elementId ] ++ interactionAttrs)
+            (arrowPart ++ labelParts)
+        , if isExpanded && hasChildren then
             div [ class "ml-4 border-l border-base-300 pl-2" ]
                 (List.map
                     (\key ->
@@ -605,7 +629,7 @@ viewFilteredRootChildren : FilterConfig msg -> Set String -> D.Value -> Html msg
 viewFilteredRootChildren config expandedPaths jsonValue =
     let
         keys =
-            getObjectKeys jsonValue
+            getObjectKeysWithoutType jsonValue
 
         -- Filter keys to only show those that are visible
         visibleKeys =
@@ -679,7 +703,7 @@ viewFilteredObject config expandedPaths currentPath jsonValue highlightClass =
             Set.member pathKey expandedPaths || pathKey == ""
 
         keys =
-            getObjectKeys jsonValue
+            getObjectKeysWithoutType jsonValue
 
         -- Filter keys to only show those that are visible
         visibleKeys =
@@ -696,8 +720,11 @@ viewFilteredObject config expandedPaths currentPath jsonValue highlightClass =
                 )
                 keys
 
-        keyCount =
-            List.length visibleKeys
+        hasChildren =
+            not (List.isEmpty visibleKeys)
+
+        typeAnnotation =
+            getTypeAnnotation jsonValue
 
         label =
             if List.isEmpty currentPath then
@@ -708,27 +735,48 @@ viewFilteredObject config expandedPaths currentPath jsonValue highlightClass =
 
         elementId =
             pathToElementId pathKey
+
+        labelParts =
+            case typeAnnotation of
+                Just typeName ->
+                    [ span [ class "text-primary" ] [ text label ]
+                    , span [ class "text-base-content/40" ] [ text " : " ]
+                    , span [ class "text-info" ] [ text typeName ]
+                    ]
+
+                Nothing ->
+                    [ span [ class "text-primary" ] [ text label ] ]
+
+        arrowAndInteraction =
+            if hasChildren then
+                ( [ span [ class "text-base-content/40 w-4" ]
+                        [ text
+                            (if isExpanded then
+                                "▼"
+
+                             else
+                                "▶"
+                            )
+                        ]
+                  ]
+                , [ class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
+                  , onClick (config.onToggleExpand currentPath)
+                  ]
+                )
+
+            else
+                ( [ span [ class "text-base-content/40 w-4" ] [ text "" ] ]
+                , [ class ("inline-flex items-center gap-1 rounded px-1 py-0.5" ++ highlightClass) ]
+                )
+
+        ( arrowPart, interactionAttrs ) =
+            arrowAndInteraction
     in
     div [ class "tree-node pl-2" ]
         [ div
-            [ id elementId
-            , class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-            , onClick (config.onToggleExpand currentPath)
-            ]
-            [ span [ class "text-base-content/40 w-4" ]
-                [ text
-                    (if isExpanded then
-                        "▼"
-
-                     else
-                        "▶"
-                    )
-                ]
-            , span [ class "text-primary" ] [ text label ]
-            , span [ class "text-base-content/40" ]
-                [ text (" {" ++ String.fromInt keyCount ++ "}") ]
-            ]
-        , if isExpanded then
+            ([ id elementId ] ++ interactionAttrs)
+            (arrowPart ++ labelParts)
+        , if isExpanded && hasChildren then
             div [ class "ml-4 border-l border-base-300 pl-2" ]
                 (List.map
                     (\key ->
@@ -975,7 +1023,7 @@ viewDiffBeforeRootChildren : BeforeDiffConfig msg -> Set String -> D.Value -> Ht
 viewDiffBeforeRootChildren config expandedPaths jsonValue =
     let
         keys =
-            getObjectKeys jsonValue
+            getObjectKeysWithoutType jsonValue
     in
     div [ class "pl-2" ]
         (List.map
@@ -1059,10 +1107,13 @@ viewDiffBeforeObject config expandedPaths currentPath jsonValue highlightClass =
             Set.member pathKey expandedPaths || pathKey == ""
 
         keys =
-            getObjectKeys jsonValue
+            getObjectKeysWithoutType jsonValue
 
-        keyCount =
-            List.length keys
+        hasChildren =
+            not (List.isEmpty keys)
+
+        typeAnnotation =
+            getTypeAnnotation jsonValue
 
         label =
             if List.isEmpty currentPath then
@@ -1073,27 +1124,48 @@ viewDiffBeforeObject config expandedPaths currentPath jsonValue highlightClass =
 
         elementId =
             pathToElementId pathKey
+
+        labelParts =
+            case typeAnnotation of
+                Just typeName ->
+                    [ span [ class "text-primary" ] [ text label ]
+                    , span [ class "text-base-content/40" ] [ text " : " ]
+                    , span [ class "text-info" ] [ text typeName ]
+                    ]
+
+                Nothing ->
+                    [ span [ class "text-primary" ] [ text label ] ]
+
+        arrowAndInteraction =
+            if hasChildren then
+                ( [ span [ class "text-base-content/40 w-4" ]
+                        [ text
+                            (if isExpanded then
+                                "▼"
+
+                             else
+                                "▶"
+                            )
+                        ]
+                  ]
+                , [ class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
+                  , onClick (config.onToggleExpand currentPath)
+                  ]
+                )
+
+            else
+                ( [ span [ class "text-base-content/40 w-4" ] [ text "" ] ]
+                , [ class ("inline-flex items-center gap-1 rounded px-1 py-0.5" ++ highlightClass) ]
+                )
+
+        ( arrowPart, interactionAttrs ) =
+            arrowAndInteraction
     in
     div [ class "tree-node pl-2" ]
         [ div
-            [ id elementId
-            , class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-            , onClick (config.onToggleExpand currentPath)
-            ]
-            [ span [ class "text-base-content/40 w-4" ]
-                [ text
-                    (if isExpanded then
-                        "▼"
-
-                     else
-                        "▶"
-                    )
-                ]
-            , span [ class "text-primary" ] [ text label ]
-            , span [ class "text-base-content/40" ]
-                [ text (" {" ++ String.fromInt keyCount ++ "}") ]
-            ]
-        , if isExpanded then
+            ([ id elementId ] ++ interactionAttrs)
+            (arrowPart ++ labelParts)
+        , if isExpanded && hasChildren then
             div [ class "ml-4 border-l border-base-300 pl-2" ]
                 (List.map
                     (\key ->
@@ -1345,7 +1417,7 @@ viewDiffRootChildren : DiffConfig msg -> Set String -> Set String -> D.Value -> 
 viewDiffRootChildren config expandedPaths visiblePaths jsonValue =
     let
         keys =
-            getObjectKeys jsonValue
+            getObjectKeysWithoutType jsonValue
 
         -- Filter keys to only show those with changes when changesOnly is enabled
         visibleKeys =
@@ -1496,7 +1568,7 @@ viewDiffObject config expandedPaths visiblePaths currentPath jsonValue highlight
             Set.member pathKey expandedPaths || pathKey == ""
 
         keys =
-            getObjectKeys jsonValue
+            getObjectKeysWithoutType jsonValue
 
         -- Filter keys to only show those with changes when changesOnly is enabled
         visibleKeys =
@@ -1517,8 +1589,11 @@ viewDiffObject config expandedPaths visiblePaths currentPath jsonValue highlight
             else
                 keys
 
-        keyCount =
-            List.length visibleKeys
+        hasChildren =
+            not (List.isEmpty visibleKeys)
+
+        typeAnnotation =
+            getTypeAnnotation jsonValue
 
         label =
             if List.isEmpty currentPath then
@@ -1529,27 +1604,48 @@ viewDiffObject config expandedPaths visiblePaths currentPath jsonValue highlight
 
         elementId =
             pathToElementId pathKey
+
+        labelParts =
+            case typeAnnotation of
+                Just typeName ->
+                    [ span [ class "text-primary" ] [ text label ]
+                    , span [ class "text-base-content/40" ] [ text " : " ]
+                    , span [ class "text-info" ] [ text typeName ]
+                    ]
+
+                Nothing ->
+                    [ span [ class "text-primary" ] [ text label ] ]
+
+        arrowAndInteraction =
+            if hasChildren then
+                ( [ span [ class "text-base-content/40 w-4" ]
+                        [ text
+                            (if isExpanded then
+                                "▼"
+
+                             else
+                                "▶"
+                            )
+                        ]
+                  ]
+                , [ class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
+                  , onClick (config.onToggleExpand currentPath)
+                  ]
+                )
+
+            else
+                ( [ span [ class "text-base-content/40 w-4" ] [ text "" ] ]
+                , [ class ("inline-flex items-center gap-1 rounded px-1 py-0.5" ++ highlightClass) ]
+                )
+
+        ( arrowPart, interactionAttrs ) =
+            arrowAndInteraction
     in
     div [ class "tree-node pl-2" ]
         [ div
-            [ id elementId
-            , class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-            , onClick (config.onToggleExpand currentPath)
-            ]
-            [ span [ class "text-base-content/40 w-4" ]
-                [ text
-                    (if isExpanded then
-                        "▼"
-
-                     else
-                        "▶"
-                    )
-                ]
-            , span [ class "text-primary" ] [ text label ]
-            , span [ class "text-base-content/40" ]
-                [ text (" {" ++ String.fromInt keyCount ++ "}") ]
-            ]
-        , if isExpanded then
+            ([ id elementId ] ++ interactionAttrs)
+            (arrowPart ++ labelParts)
+        , if isExpanded && hasChildren then
             div [ class "ml-4 border-l border-base-300 pl-2" ]
                 (List.map
                     (\key ->
@@ -1947,6 +2043,26 @@ getObjectKeys value =
 
         Err _ ->
             []
+
+
+{-| Get the _type field value from an object, if present.
+-}
+getTypeAnnotation : D.Value -> Maybe String
+getTypeAnnotation value =
+    case D.decodeValue (D.field "_type" D.string) value of
+        Ok typeStr ->
+            Just typeStr
+
+        Err _ ->
+            Nothing
+
+
+{-| Get object keys excluding _type.
+-}
+getObjectKeysWithoutType : D.Value -> List String
+getObjectKeysWithoutType value =
+    getObjectKeys value
+        |> List.filter (\k -> k /= "_type")
 
 
 getObjectField : String -> D.Value -> Maybe D.Value

@@ -39,13 +39,23 @@ case "$COMMAND" in
         PATH_ARG="${1:-/tmp/screenshot.png}"
         exec node "$BROWSER_TOOLS" screenshot "{\"wsUrl\": \"$WS_URL\", \"path\": \"$PATH_ARG\"}"
         ;;
-    click)
+    click-on-text)
         TEXT_ARG="$1"
         if [ -z "$TEXT_ARG" ]; then
-            echo "Error: click requires text argument" >&2
+            echo "Error: click-on-text requires text argument" >&2
             exit 1
         fi
-        exec node "$BROWSER_TOOLS" click "{\"wsUrl\": \"$WS_URL\", \"text\": \"$TEXT_ARG\"}"
+        # Custom script needed for exact text matching (library hardcodes exact: false)
+        exec node "$SCRIPT_DIR/click-on-text.js" "$TEXT_ARG"
+        ;;
+    click-on-id)
+        ID_ARG="$1"
+        if [ -z "$ID_ARG" ]; then
+            echo "Error: click-on-id requires element ID argument" >&2
+            exit 1
+        fi
+        # Use CSS selector for ID - supported by the library
+        exec node "$BROWSER_TOOLS" click "{\"wsUrl\": \"$WS_URL\", \"css\": \"#$ID_ARG\"}"
         ;;
     type)
         VALUE_ARG="$1"
@@ -87,7 +97,7 @@ case "$COMMAND" in
         ;;
     *)
         echo "Unknown command: $COMMAND" >&2
-        echo "Available commands: screenshot, click, type, wait-text, dump-dom, list-selectors, list-windows, open-file, mcp-border" >&2
+        echo "Available commands: screenshot, click-on-text, click-on-id, type, wait-text, dump-dom, list-selectors, list-windows, open-file, mcp-border" >&2
         exit 1
         ;;
 esac

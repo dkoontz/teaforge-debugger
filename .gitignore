@@ -5,6 +5,7 @@ dist
 
 # Testing
 e2e/temp
+screenshots
 
 # OS
 .DS_Store

@@ -33,11 +33,12 @@ import Types
         , Effect
         , ErrorEntryData
         , InitEntryData
-        , InputSource
+        , InputSource(..)
         , LogEntry(..)
         , SubscriptionChangeData
         , TreePath
         , UpdateEntryData
+        , WebSocketStatus(..)
         , getMessageName
         , getTimestamp
         )
@@ -158,11 +159,11 @@ updateMessageViewState updateFn model =
 This structure manages:
 
   - Log entries received from the input source (stored as Array for efficient appending)
-  - Active input source (file being read)
+  - Active input source (file being read or WebSocket connection)
   - Currently selected message index
   - View options (show previous state, highlight changes)
   - Search and filter state
-  - UI state (sidebar width)
+  - UI state (sidebar width, WebSocket modal)
   - Tree view states for after and before states
   - Diff view state (expanded paths, computed changes)
   - Per-message view states for retaining expansion state
@@ -190,6 +191,9 @@ type alias Model =
     , changes : Dict String Diff.Change
     , messageViewStates : Dict Int MessageViewState
     , compression : Compression
+    , showWsModal : Bool
+    , wsUrlInput : String
+    , recentWsUrls : List String
     }
 
 
@@ -197,6 +201,7 @@ type alias Model =
 -}
 type alias Flags =
     { sidebarWidth : Int
+    , recentWsUrls : List String
     }
 
 
@@ -204,26 +209,31 @@ type alias Flags =
 -}
 flagsDecoder : D.Decoder Flags
 flagsDecoder =
-    D.map Flags
+    D.map2 Flags
         (D.field "sidebarWidth" D.int)
+        (D.oneOf
+            [ D.field "recentWsUrls" (D.list D.string)
+            , D.succeed []
+            ]
+        )
 
 
 {-| Initialize the model with default values.
 
 The application starts with no active input source.
-Sidebar width is loaded from localStorage via flags.
+Sidebar width and recent WebSocket URLs are loaded from localStorage via flags.
 
 -}
 init : E.Value -> ( Model, Cmd Msg )
 init flagsValue =
     let
-        initialSidebarWidth =
+        ( initialSidebarWidth, initialRecentWsUrls ) =
             case D.decodeValue flagsDecoder flagsValue of
                 Ok flags ->
-                    clamp 200 600 flags.sidebarWidth
+                    ( clamp 200 600 flags.sidebarWidth, flags.recentWsUrls )
 
                 Err _ ->
-                    320
+                    ( 320, [] )
     in
     ( { logEntries = Array.empty
       , inputSource = Nothing
@@ -246,6 +256,9 @@ init flagsValue =
       , changes = Dict.empty
       , messageViewStates = Dict.empty
       , compression = CompressionDict.empty
+      , showWsModal = False
+      , wsUrlInput = ""
+      , recentWsUrls = initialRecentWsUrls
       }
     , Cmd.none
     )
@@ -260,6 +273,7 @@ init flagsValue =
 These are organized into categories:
 
   - File operations (opening input sources)
+  - WebSocket operations
   - Streaming (receiving entries)
   - Navigation (selecting messages)
   - View mode changes
@@ -272,6 +286,19 @@ type Msg
       OpenFileDialog
     | OpenInput String
     | InputOpened { success : Bool, path : Maybe String, error : Maybe String }
+    | DisconnectSource
+      -- WebSocket Operations
+    | OpenWsConnectionModal
+    | CloseWsConnectionModal
+    | SetWsUrlInput String
+    | SelectRecentWsUrl String
+    | ConnectWebSocket
+    | DisconnectWebSocket
+    | WsConnecting
+    | WsConnected
+    | WsDisconnected
+    | WsConnectionFailed
+    | WsConnectionLost
       -- Streaming
     | EntryReceived EntryPayload
     | InputError String
@@ -359,7 +386,7 @@ update msg model =
             -- Clear existing entries and open new input source
             ( { model
                 | logEntries = Array.empty
-                , inputSource = Just { path = path, label = path }
+                , inputSource = Just (FileSource { path = path, label = path })
                 , lastModelAfter = E.null
                 , selectedIndex = Nothing
                 , errorMessage = Nothing
@@ -368,7 +395,10 @@ update msg model =
                 , changes = Dict.empty
                 , compression = CompressionDict.empty
               }
-            , Ports.openInput path
+            , Cmd.batch
+                [ Ports.openInput path
+                , Ports.disconnectWebSocket
+                ]
             )
 
         InputOpened result ->
@@ -382,6 +412,19 @@ update msg model =
                   }
                 , Cmd.none
                 )
+
+        DisconnectSource ->
+            ( { model | inputSource = Nothing }
+            , case model.inputSource of
+                Just (FileSource _) ->
+                    Ports.closeInput
+
+                Just (WebSocketSource _) ->
+                    Ports.disconnectWebSocket
+
+                Nothing ->
+                    Cmd.none
+            )
 
         -- Streaming
         EntryReceived payload ->
@@ -416,6 +459,160 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        -- WebSocket Operations
+        OpenWsConnectionModal ->
+            ( { model
+                | showWsModal = True
+                , wsUrlInput =
+                    if String.isEmpty model.wsUrlInput then
+                        List.head model.recentWsUrls |> Maybe.withDefault "ws://localhost:8080"
+
+                    else
+                        model.wsUrlInput
+              }
+            , Cmd.none
+            )
+
+        CloseWsConnectionModal ->
+            ( { model | showWsModal = False }
+            , Cmd.none
+            )
+
+        SetWsUrlInput url ->
+            ( { model | wsUrlInput = url }
+            , Cmd.none
+            )
+
+        SelectRecentWsUrl url ->
+            ( { model | wsUrlInput = url }
+            , Cmd.none
+            )
+
+        ConnectWebSocket ->
+            let
+                url =
+                    String.trim model.wsUrlInput
+            in
+            if String.isEmpty url then
+                ( model, Cmd.none )
+
+            else
+                ( { model
+                    | showWsModal = False
+                    , logEntries = Array.empty
+                    , inputSource = Just (WebSocketSource { url = url, status = Connecting })
+                    , lastModelAfter = E.null
+                    , selectedIndex = Nothing
+                    , errorMessage = Nothing
+                    , messageViewStates = Dict.empty
+                    , changedPaths = []
+                    , changes = Dict.empty
+                    , compression = CompressionDict.empty
+                  }
+                , Ports.connectWebSocket url
+                )
+
+        DisconnectWebSocket ->
+            ( { model
+                | inputSource =
+                    case model.inputSource of
+                        Just (WebSocketSource ws) ->
+                            Just (WebSocketSource { ws | status = Disconnected })
+
+                        other ->
+                            other
+              }
+            , Ports.disconnectWebSocket
+            )
+
+        WsConnecting ->
+            ( { model
+                | inputSource =
+                    case model.inputSource of
+                        Just (WebSocketSource ws) ->
+                            Just (WebSocketSource { ws | status = Connecting })
+
+                        other ->
+                            other
+              }
+            , Cmd.none
+            )
+
+        WsConnected ->
+            let
+                -- Add URL to recent list (at the front, remove duplicates)
+                newRecentUrls =
+                    case model.inputSource of
+                        Just (WebSocketSource ws) ->
+                            ws.url
+                                :: List.filter ((/=) ws.url) model.recentWsUrls
+                                |> List.take 5
+
+                        _ ->
+                            model.recentWsUrls
+            in
+            ( { model
+                | inputSource =
+                    case model.inputSource of
+                        Just (WebSocketSource ws) ->
+                            Just (WebSocketSource { ws | status = Connected })
+
+                        other ->
+                            other
+                , recentWsUrls = newRecentUrls
+              }
+            , Cmd.none
+            )
+
+        WsDisconnected ->
+            ( { model
+                | inputSource =
+                    case model.inputSource of
+                        Just (WebSocketSource ws) ->
+                            Just (WebSocketSource { ws | status = Disconnected })
+
+                        other ->
+                            other
+              }
+            , Cmd.none
+            )
+
+        WsConnectionFailed ->
+            let
+                errorMsg =
+                    "Could not connect to server. Check that the server is running."
+            in
+            ( { model
+                | inputSource =
+                    case model.inputSource of
+                        Just (WebSocketSource ws) ->
+                            Just (WebSocketSource { ws | status = ConnectionError errorMsg })
+
+                        other ->
+                            other
+                , errorMessage = Just errorMsg
+              }
+            , Cmd.none
+            )
+
+        WsConnectionLost ->
+            let
+                errorMsg =
+                    "Connection to server was lost."
+            in
+            ( { model
+                | inputSource =
+                    case model.inputSource of
+                        Just (WebSocketSource ws) ->
+                            Just (WebSocketSource { ws | status = ConnectionError errorMsg })
+
+                        other ->
+                            other
+                , errorMessage = Just errorMsg
+              }
+            , Cmd.none
+            )
 
         -- Navigation
         SelectMessage index ->
@@ -931,13 +1128,8 @@ handleEntryReceived payload model =
                         , rawText = Maybe.withDefault "" payload.rawText
                         , error = errorMsg
                         }
-
-                newEntries =
-                    Array.push errorEntry model.logEntries
             in
-            ( { model | logEntries = newEntries }
-            , Cmd.none
-            )
+            addEntryAndMaybeSelect errorEntry model
 
         Nothing ->
             case payload.entry of
@@ -984,16 +1176,9 @@ processValidEntry lineNum rawValue model =
                                 , model = initData.model
                                 , effects = initData.effects
                                 }
-
-                        newEntries =
-                            Array.push entry model.logEntries
                     in
-                    ( { model
-                        | logEntries = newEntries
-                        , lastModelAfter = initData.model
-                      }
-                    , Cmd.none
-                    )
+                    addEntryAndMaybeSelect entry
+                        { model | lastModelAfter = initData.model }
 
                 Err e ->
                     addErrorEntry lineNum (D.errorToString e) model
@@ -1010,16 +1195,9 @@ processValidEntry lineNum rawValue model =
                                 , modelAfter = updateData.model
                                 , effects = updateData.effects
                                 }
-
-                        newEntries =
-                            Array.push entry model.logEntries
                     in
-                    ( { model
-                        | logEntries = newEntries
-                        , lastModelAfter = updateData.model
-                      }
-                    , Cmd.none
-                    )
+                    addEntryAndMaybeSelect entry
+                        { model | lastModelAfter = updateData.model }
 
                 Err e ->
                     addErrorEntry lineNum (D.errorToString e) model
@@ -1034,13 +1212,8 @@ processValidEntry lineNum rawValue model =
                                 , started = subData.started
                                 , stopped = subData.stopped
                                 }
-
-                        newEntries =
-                            Array.push entry model.logEntries
                     in
-                    ( { model | logEntries = newEntries }
-                    , Cmd.none
-                    )
+                    addEntryAndMaybeSelect entry model
 
                 Err e ->
                     addErrorEntry lineNum (D.errorToString e) model
@@ -1064,13 +1237,30 @@ addErrorEntry lineNum errorMsg model =
                 , rawText = ""
                 , error = errorMsg
                 }
-
-        newEntries =
-            Array.push errorEntry model.logEntries
     in
-    ( { model | logEntries = newEntries }
-    , Cmd.none
-    )
+    addEntryAndMaybeSelect errorEntry model
+
+
+{-| Add an entry to the log and auto-select if this is the first entry.
+-}
+addEntryAndMaybeSelect : LogEntry -> Model -> ( Model, Cmd Msg )
+addEntryAndMaybeSelect entry model =
+    let
+        newEntries =
+            Array.push entry model.logEntries
+
+        -- Auto-select first entry if nothing is selected
+        shouldAutoSelect =
+            model.selectedIndex == Nothing && Array.isEmpty model.logEntries
+
+        newModel =
+            { model | logEntries = newEntries }
+    in
+    if shouldAutoSelect then
+        update (SelectMessage 0) newModel
+
+    else
+        ( newModel, Cmd.none )
 
 
 {-| Select an entry and update the model accordingly.
@@ -1209,6 +1399,24 @@ handlePortMessage value model =
                 "inputClosed" ->
                     update InputClosed model
 
+                "wsConnecting" ->
+                    update WsConnecting model
+
+                "wsConnected" ->
+                    update WsConnected model
+
+                "wsDisconnected" ->
+                    update WsDisconnected model
+
+                "wsConnectionFailed" ->
+                    update WsConnectionFailed model
+
+                "wsConnectionLost" ->
+                    update WsConnectionLost model
+
+                "recentWsUrls" ->
+                    handleRecentWsUrls value model
+
                 _ ->
                     ( model, Cmd.none )
 
@@ -1302,6 +1510,20 @@ handleInputErrorPort value model =
             ( { model | errorMessage = Just "An unknown error occurred" }
             , Cmd.none
             )
+
+
+handleRecentWsUrls : E.Value -> Model -> ( Model, Cmd Msg )
+handleRecentWsUrls value model =
+    let
+        decoder =
+            D.field "payload" (D.list D.string)
+    in
+    case D.decodeValue decoder value of
+        Ok urls ->
+            ( { model | recentWsUrls = urls }, Cmd.none )
+
+        Err _ ->
+            ( model, Cmd.none )
 
 
 
@@ -1496,7 +1718,28 @@ view model =
                 ]
             ]
         , viewErrorBanner model
+        , viewWsModal model
         ]
+
+
+
+-- BUTTON STYLES
+
+
+{-| Primary button style for main action buttons (Open File, WebSocket, Connect).
+Uses an outline style with border.
+-}
+primaryButtonClass : String
+primaryButtonClass =
+    "btn btn-outline"
+
+
+{-| Secondary button style for Cancel and Disconnect buttons.
+Uses a soft, less vibrant primary color.
+-}
+secondaryButtonClass : String
+secondaryButtonClass =
+    "btn btn-primary-soft"
 
 
 {-| Render a dismissible error toast at the top of the screen.
@@ -1524,6 +1767,93 @@ viewErrorBanner model =
 
         Nothing ->
             text ""
+
+
+{-| Render the WebSocket connection modal.
+-}
+viewWsModal : Model -> Html Msg
+viewWsModal model =
+    if model.showWsModal then
+        div [ class "modal modal-open" ]
+            [ div [ class "modal-box" ]
+                [ h3 [ class "font-bold text-lg mb-4" ]
+                    [ i [ class "fa-solid fa-plug mr-2" ] []
+                    , text "WebSocket Connection"
+                    ]
+                , div [ class "form-control mb-4" ]
+                    [ label [ class "label" ]
+                        [ span [ class "label-text" ] [ text "WebSocket URL" ]
+                        ]
+                    , input
+                        [ id "ws-url-input"
+                        , type_ "text"
+                        , class "input input-bordered w-full"
+                        , placeholder "ws://localhost:8080"
+                        , value model.wsUrlInput
+                        , onInput SetWsUrlInput
+                        , onEnterKey ConnectWebSocket
+                        ]
+                        []
+                    ]
+                , if List.isEmpty model.recentWsUrls then
+                    text ""
+
+                  else
+                    div [ class "form-control mb-4" ]
+                        [ label [ class "label" ]
+                            [ span [ class "label-text" ] [ text "Recent URLs" ]
+                            ]
+                        , div [ class "flex flex-wrap gap-2" ]
+                            (List.indexedMap
+                                (\idx url ->
+                                    button
+                                        [ id ("btn-recent-url-" ++ String.fromInt idx)
+                                        , class "btn btn-xs btn-outline"
+                                        , onClick (SelectRecentWsUrl url)
+                                        ]
+                                        [ text url ]
+                                )
+                                model.recentWsUrls
+                            )
+                        ]
+                , div [ class "modal-action" ]
+                    [ button
+                        [ id "btn-ws-cancel"
+                        , class secondaryButtonClass
+                        , onClick CloseWsConnectionModal
+                        ]
+                        [ text "Cancel" ]
+                    , button
+                        [ id "btn-ws-connect"
+                        , class primaryButtonClass
+                        , type_ "button"
+                        , onClick ConnectWebSocket
+                        , disabled (String.isEmpty (String.trim model.wsUrlInput))
+                        ]
+                        [ text "Connect" ]
+                    ]
+                ]
+            ]
+
+    else
+        text ""
+
+
+{-| Handle Enter key press on an input.
+-}
+onEnterKey : Msg -> Attribute Msg
+onEnterKey msg =
+    Html.Events.on "keydown"
+        (D.field "key" D.string
+            |> D.andThen
+                (\key ->
+                    if key == "Enter" then
+                        D.succeed msg
+
+                    else
+                        D.fail "not enter"
+                )
+        )
 
 
 {-| Render the resize gutter between sidebar and content.
@@ -1554,7 +1884,8 @@ onMouseDown msg =
 viewSidebar : Model -> Html Msg
 viewSidebar model =
     div [ class "flex flex-col h-full overflow-hidden min-w-0" ]
-        [ div [ class "p-4 border-b border-base-300 shrink-0" ]
+        [ viewInputSourceHeader model
+        , div [ class "p-4 border-b border-base-300 shrink-0" ]
             [ h2 [ class "font-semibold text-lg" ] [ text "Messages" ]
             , div [ class "flex flex-nowrap items-center gap-2 mt-1" ]
                 [ span [ class "text-sm text-base-content/60 whitespace-nowrap flex-none" ]
@@ -1595,21 +1926,200 @@ viewSidebar model =
         ]
 
 
+{-| Render the input source header with status and buttons.
+-}
+viewInputSourceHeader : Model -> Html Msg
+viewInputSourceHeader model =
+    div [ class "p-3 border-b border-base-300 shrink-0 bg-base-100" ]
+        [ case model.inputSource of
+            Nothing ->
+                div [ class "flex flex-col gap-2" ]
+                    [ div [ class "text-sm text-base-content/60" ] [ text "No message source selected" ]
+                    , div [ class "flex gap-2" ]
+                        [ button
+                            [ id "btn-open-file"
+                            , class (primaryButtonClass ++ " btn-sm flex-1")
+                            , onClick OpenFileDialog
+                            ]
+                            [ i [ class "fa-solid fa-folder-open mr-1" ] []
+                            , text "Open File"
+                            ]
+                        , button
+                            [ id "btn-websocket"
+                            , class (primaryButtonClass ++ " btn-sm flex-1")
+                            , onClick OpenWsConnectionModal
+                            ]
+                            [ i [ class "fa-solid fa-plug mr-1" ] []
+                            , text "WebSocket"
+                            ]
+                        ]
+                    ]
+
+            Just (FileSource fileData) ->
+                div [ class "flex flex-col gap-2" ]
+                    [ div [ class "flex items-center gap-2" ]
+                        [ span [ class "text-xs text-base-content/60 font-medium" ] [ text "Message Source" ]
+                        , span [ class "text-sm truncate flex-1", title fileData.path ]
+                            [ text (truncatePath fileData.path) ]
+                        ]
+                    , button
+                        [ id "btn-disconnect"
+                        , class (secondaryButtonClass ++ " btn-xs w-full")
+                        , onClick DisconnectSource
+                        ]
+                        [ text "Disconnect" ]
+                    ]
+
+            Just (WebSocketSource wsData) ->
+                case wsData.status of
+                    Connected ->
+                        div [ class "flex flex-col gap-2" ]
+                            [ div [ class "flex items-center gap-2" ]
+                                [ viewWsStatusIndicator wsData.status
+                                , span [ class "text-xs text-base-content/60 font-medium" ] [ text "Message Source" ]
+                                , span [ class "text-sm truncate flex-1", title wsData.url ]
+                                    [ text wsData.url ]
+                                ]
+                            , button
+                                [ id "btn-disconnect"
+                                , class (secondaryButtonClass ++ " btn-xs w-full")
+                                , onClick DisconnectSource
+                                ]
+                                [ text "Disconnect" ]
+                            ]
+
+                    Connecting ->
+                        div [ class "flex flex-col gap-2" ]
+                            [ div [ class "flex items-center gap-2" ]
+                                [ viewWsStatusIndicator wsData.status
+                                , span [ class "text-xs text-base-content/60 font-medium" ] [ text "Message Source" ]
+                                , span [ class "text-sm truncate flex-1", title wsData.url ]
+                                    [ text wsData.url ]
+                                ]
+                            , button
+                                [ id "btn-connecting"
+                                , class (secondaryButtonClass ++ " btn-xs w-full")
+                                , disabled True
+                                ]
+                                [ span [ class "loading loading-spinner loading-xs" ] []
+                                , text "Connecting..."
+                                ]
+                            ]
+
+                    _ ->
+                        -- Disconnected or Error - show status and allow reconnection
+                        div [ class "flex flex-col gap-2" ]
+                            [ div [ class "flex items-center gap-2" ]
+                                [ viewWsStatusIndicator wsData.status
+                                , span [ class "text-xs text-base-content/60 font-medium" ] [ text "Message Source" ]
+                                , span [ class "text-sm truncate flex-1", title wsData.url ]
+                                    [ text wsData.url ]
+                                ]
+                            , div [ class "flex gap-2" ]
+                                [ button
+                                    [ id "btn-open-file"
+                                    , class (primaryButtonClass ++ " btn-sm flex-1")
+                                    , onClick OpenFileDialog
+                                    ]
+                                    [ i [ class "fa-solid fa-folder-open mr-1" ] []
+                                    , text "Open File"
+                                    ]
+                                , button
+                                    [ id "btn-websocket"
+                                    , class (primaryButtonClass ++ " btn-sm flex-1")
+                                    , onClick OpenWsConnectionModal
+                                    ]
+                                    [ i [ class "fa-solid fa-plug mr-1" ] []
+                                    , text "WebSocket"
+                                    ]
+                                ]
+                            ]
+        ]
+
+
+{-| Render WebSocket status indicator.
+-}
+viewWsStatusIndicator : WebSocketStatus -> Html Msg
+viewWsStatusIndicator status =
+    case status of
+        Connected ->
+            span [ class "flex items-center gap-1" ]
+                [ span [ class "ws-status-indicator ws-status-connected" ] []
+                , span [ class "text-xs text-success font-medium" ] [ text "Live" ]
+                ]
+
+        Connecting ->
+            span [ class "flex items-center gap-1" ]
+                [ span [ class "loading loading-spinner loading-xs" ] []
+                , span [ class "text-xs text-base-content/60" ] [ text "Connecting" ]
+                ]
+
+        Disconnected ->
+            span [ class "flex items-center gap-1" ]
+                [ span [ class "ws-status-indicator ws-status-disconnected" ] []
+                , span [ class "text-xs text-error" ] [ text "Disconnected" ]
+                ]
+
+        ConnectionError _ ->
+            span [ class "flex items-center gap-1" ]
+                [ span [ class "ws-status-indicator ws-status-error" ] []
+                , span [ class "text-xs text-error" ] [ text "Disconnected" ]
+                ]
+
+
+{-| Truncate a file path for display.
+-}
+truncatePath : String -> String
+truncatePath path =
+    let
+        parts =
+            String.split "/" path
+
+        filename =
+            List.reverse parts |> List.head |> Maybe.withDefault path
+    in
+    if String.length path > 30 then
+        ".../" ++ filename
+
+    else
+        path
+
+
 {-| Render the main content area.
 -}
 viewMainContent : Model -> Html Msg
 viewMainContent model =
-    main_ [ class "flex-1 flex flex-col overflow-hidden" ]
-        [ div [ class "p-4 border-b border-base-300 shrink-0" ]
-            [ h2 [ class "font-semibold text-lg" ] [ text "Model" ]
-            ]
-        , viewViewOptions model
-        , div [ class "flex-1 overflow-auto" ]
-            [ viewMessageDetailsPanel model
-            , viewEffectsPanel model
-            , viewStateContent model
-            ]
-        ]
+    case model.selectedIndex of
+        Nothing ->
+            -- No message selected - show placeholder
+            main_ [ class "flex-1 flex flex-col overflow-hidden" ]
+                [ div [ class "flex-1 overflow-auto p-4" ]
+                    [ viewNoSelection model ]
+                ]
+
+        Just index ->
+            case Array.get index model.logEntries of
+                Nothing ->
+                    -- Invalid index - show placeholder
+                    main_ [ class "flex-1 flex flex-col overflow-hidden" ]
+                        [ div [ class "flex-1 overflow-auto p-4" ]
+                            [ viewNoSelection model ]
+                        ]
+
+                Just entry ->
+                    -- Message selected - show full state view
+                    main_ [ class "flex-1 flex flex-col overflow-hidden" ]
+                        [ div [ class "p-4 border-b border-base-300 shrink-0" ]
+                            [ h2 [ class "font-semibold text-lg" ] [ text "Model" ]
+                            ]
+                        , viewViewOptions model
+                        , div [ class "flex-1 overflow-auto" ]
+                            [ viewMessageDetailsPanel model
+                            , viewEffectsPanel model
+                            , div [ class "mx-4 mt-4 mb-4" ]
+                                [ viewSelectedEntry model index entry ]
+                            ]
+                        ]
 
 
 {-| Render the view options bar with checkboxes.
@@ -1734,25 +2244,6 @@ searchKeyDecoder =
         (D.field "shiftKey" D.bool)
 
 
-{-| Render the state content area based on selection.
--}
-viewStateContent : Model -> Html Msg
-viewStateContent model =
-    div [ class "p-4" ]
-        [ case model.selectedIndex of
-            Nothing ->
-                viewNoSelection model
-
-            Just index ->
-                case Array.get index model.logEntries of
-                    Just entry ->
-                        viewSelectedEntry model index entry
-
-                    Nothing ->
-                        viewNoSelection model
-        ]
-
-
 {-| Render placeholder when no message is selected.
 -}
 viewNoSelection : Model -> Html Msg
@@ -1762,12 +2253,7 @@ viewNoSelection model =
             (if Array.isEmpty model.logEntries then
                 [ div [ class "text-5xl mb-4" ] [ text "📂" ]
                 , p [ class "text-lg font-medium" ] [ text "No file loaded" ]
-                , p [ class "text-sm mt-2" ] [ text "Click 'Open File' to load a TeaForge log file" ]
-                , button
-                    [ class "btn btn-primary btn-sm mt-4"
-                    , onClick OpenFileDialog
-                    ]
-                    [ text "Open File" ]
+                , p [ class "text-sm mt-2" ] [ text "Open a file or connect to a WebSocket to begin" ]
                 ]
 
              else

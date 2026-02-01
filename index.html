@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:;">
     <title>TeaForge Debugger</title>
     <link rel="stylesheet" href="node_modules/@fortawesome/fontawesome-free/css/all.min.css">
     <link rel="stylesheet" href="dist/styles.css">
@@ -22,17 +22,134 @@
     <script>
         // Sidebar width persistence
         const SIDEBAR_WIDTH_KEY = 'teaforge-sidebar-width';
+        const RECENT_WS_URLS_KEY = 'teaforge-recent-ws-urls';
 
         function getSavedSidebarWidth() {
             const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
             return saved ? parseInt(saved, 10) : 320;
         }
 
-        // Initialize the Elm application with saved sidebar width
+        function getRecentWsUrls() {
+            try {
+                const saved = localStorage.getItem(RECENT_WS_URLS_KEY);
+                return saved ? JSON.parse(saved) : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function saveRecentWsUrls(urls) {
+            localStorage.setItem(RECENT_WS_URLS_KEY, JSON.stringify(urls.slice(0, 5)));
+        }
+
+        // Initialize the Elm application with saved sidebar width and recent WS URLs
         const app = Elm.Main.init({
             node: document.getElementById('elm-app'),
-            flags: { sidebarWidth: getSavedSidebarWidth() }
+            flags: {
+                sidebarWidth: getSavedSidebarWidth(),
+                recentWsUrls: getRecentWsUrls()
+            }
         });
+
+        // WebSocket manager for handling connections
+        const wsManager = {
+            socket: null,
+            lineNumber: 0,
+            userInitiatedDisconnect: false,
+            wasConnected: false,
+            hadError: false,
+
+            connect(url) {
+                // Close any existing connection
+                this.disconnect();
+                this.lineNumber = 0;
+                this.userInitiatedDisconnect = false;
+                this.wasConnected = false;
+                this.hadError = false;
+
+                sendToElm({ type: 'wsConnecting' });
+
+                try {
+                    this.socket = new WebSocket(url);
+
+                    this.socket.onopen = () => {
+                        this.wasConnected = true;
+
+                        // Save URL to recent list
+                        const recentUrls = getRecentWsUrls();
+                        const newUrls = [url, ...recentUrls.filter(u => u !== url)].slice(0, 5);
+                        saveRecentWsUrls(newUrls);
+
+                        sendToElm({ type: 'wsConnected' });
+                    };
+
+                    this.socket.onmessage = (event) => {
+                        const line = event.data.trim();
+                        if (!line) return;
+
+                        this.lineNumber++;
+
+                        try {
+                            const entry = JSON.parse(line);
+                            sendToElm({
+                                type: 'entryReceived',
+                                payload: {
+                                    lineNumber: this.lineNumber,
+                                    entry: entry
+                                }
+                            });
+                        } catch (parseError) {
+                            sendToElm({
+                                type: 'entryReceived',
+                                payload: {
+                                    lineNumber: this.lineNumber,
+                                    error: parseError.message,
+                                    rawText: line
+                                }
+                            });
+                        }
+                    };
+
+                    this.socket.onerror = (error) => {
+                        // Mark that an error occurred - the actual error message
+                        // will be sent in onclose for better context
+                        this.hadError = true;
+                    };
+
+                    this.socket.onclose = (event) => {
+                        // Don't report error if user initiated disconnect
+                        if (this.userInitiatedDisconnect) {
+                            sendToElm({ type: 'wsDisconnected' });
+                        } else if (event.wasClean) {
+                            sendToElm({ type: 'wsDisconnected' });
+                        } else {
+                            // Send appropriate status based on connection state
+                            if (!this.wasConnected) {
+                                // Never connected = server not reachable
+                                sendToElm({ type: 'wsConnectionFailed' });
+                            } else {
+                                // Was connected but lost connection
+                                sendToElm({ type: 'wsConnectionLost' });
+                            }
+                        }
+                        this.socket = null;
+                    };
+                } catch (error) {
+                    sendToElm({
+                        type: 'wsError',
+                        payload: { error: error.message || 'Failed to create WebSocket connection' }
+                    });
+                }
+            },
+
+            disconnect() {
+                if (this.socket) {
+                    this.userInitiatedDisconnect = true;
+                    this.socket.close();
+                    this.socket = null;
+                }
+            }
+        };
 
         // Wire up Elm outgoing port to Electron APIs
         // The Elm app sends commands via the outgoing port, and we handle them here
@@ -90,6 +207,15 @@
                         case 'saveSidebarWidth':
                             // Save sidebar width to localStorage
                             localStorage.setItem(SIDEBAR_WIDTH_KEY, payload.width.toString());
+                            break;
+
+                        case 'connectWebSocket':
+                            wsManager.connect(payload.url);
+                            break;
+
+                        case 'disconnectWebSocket':
+                            wsManager.disconnect();
+                            // wsDisconnected will be sent by the onclose handler
                             break;
 
                         default:

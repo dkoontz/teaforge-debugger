@@ -6,7 +6,8 @@ module Types exposing
     , ErrorEntryData
     , MessageData
     , Effect
-    , InputSource
+    , InputSource(..)
+    , WebSocketStatus(..)
     , TreePath
     , DisplayOrder(..)
     , getTimestamp
@@ -103,10 +104,18 @@ type alias Effect =
 
 {-| Represents an active input source for log entries.
 -}
-type alias InputSource =
-    { path : String
-    , label : String
-    }
+type InputSource
+    = FileSource { path : String, label : String }
+    | WebSocketSource { url : String, status : WebSocketStatus }
+
+
+{-| Status of a WebSocket connection.
+-}
+type WebSocketStatus
+    = Connecting
+    | Connected
+    | Disconnected
+    | ConnectionError String
 
 
 {-| A path through a tree structure, used for navigation and search results.

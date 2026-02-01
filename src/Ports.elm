@@ -3,9 +3,12 @@ port module Ports exposing
     , outgoing
     , openFileDialog
     , openInput
+    , closeInput
     , scrollIntoView
     , focusElement
     , saveSidebarWidth
+    , connectWebSocket
+    , disconnectWebSocket
     )
 
 {-| Port module for JavaScript interop.
@@ -90,6 +93,22 @@ openInput path =
         )
 
 
+{-| Request to close the current input source (file stream).
+
+Sends: `{ type: "closeInput", payload: null }`
+No response expected.
+
+-}
+closeInput : Cmd msg
+closeInput =
+    outgoing
+        (E.object
+            [ ( "type", E.string "closeInput" )
+            , ( "payload", E.null )
+            ]
+        )
+
+
 {-| Request to scroll an element into view (only scrolls if element is out of view).
 
 Sends: `{ type: "scrollIntoView", payload: { elementId: string } }`
@@ -146,5 +165,42 @@ saveSidebarWidth width =
                     [ ( "width", E.int width )
                     ]
               )
+            ]
+        )
+
+
+{-| Connect to a WebSocket server for streaming log entries.
+
+Sends: `{ type: "connectWebSocket", payload: { url: string } }`
+Expects: `{ type: "wsConnecting" }`, then `{ type: "wsConnected" }` or `{ type: "wsError", payload: { error: string } }`
+Then receives: `{ type: "entryReceived", payload: { lineNumber: int, entry?: value, error?: string, rawText?: string } }`
+
+-}
+connectWebSocket : String -> Cmd msg
+connectWebSocket url =
+    outgoing
+        (E.object
+            [ ( "type", E.string "connectWebSocket" )
+            , ( "payload"
+              , E.object
+                    [ ( "url", E.string url )
+                    ]
+              )
+            ]
+        )
+
+
+{-| Disconnect from the current WebSocket server.
+
+Sends: `{ type: "disconnectWebSocket", payload: null }`
+Expects: `{ type: "wsDisconnected" }`
+
+-}
+disconnectWebSocket : Cmd msg
+disconnectWebSocket =
+    outgoing
+        (E.object
+            [ ( "type", E.string "disconnectWebSocket" )
+            , ( "payload", E.null )
             ]
         )

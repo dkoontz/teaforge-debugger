@@ -51,8 +51,11 @@ npm run agent:open-file /path/to/file.jsonl
 # Take screenshot
 npm run agent:screenshot /tmp/screenshot.png
 
-# Click by text content
-npm run agent:click "Open File"
+# Click by exact text match
+npm run agent:clickOnText "Open File"
+
+# Click by element ID
+npm run agent:clickOnId "btn-open-file"
 
 # Type into focused element
 npm run agent:type "search text"
@@ -76,6 +79,19 @@ npm run agent:mcp-border toggle  # Toggle visibility (default)
 ```
 
 The browser-tools scripts automatically read the WebSocket URL from the most recent launch session, so no manual `WS_URL` configuration is needed.
+
+### WebSocket Testing
+
+The app supports connecting to a WebSocket server to receive JSONL entries in real-time. For testing:
+
+```bash
+# Start a test WebSocket server (streams new content appended to the log file)
+npm run ws:test-server
+```
+
+Then connect from the app using the "WebSocket" button and URL `ws://localhost:8080`.
+
+The WebSocket server only sends each message in the file once so you will need to stop and restart the server each time you launch the app to get a fresh set of messages.
 
 ### App Flags
 

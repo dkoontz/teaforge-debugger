@@ -5,7 +5,8 @@
       "Bash(npm run *)",
       "Bash(npx:*)",
       "Bash(elm:*)",
-      "Bash(npm run agent:*)"
+      "Bash(npm run agent:*)",
+      "Bash(npm run ws:*)"
     ]
   }
 }

@@ -83,6 +83,8 @@ type alias MessageViewState =
     , afterExpandedPaths : Set String
     , effectExpandedPaths : Dict Int (Set String)
     , payloadExpandedPaths : Set String
+    , startedSubExpandedPaths : Set String
+    , stoppedSubExpandedPaths : Set String
     }
 
 
@@ -94,6 +96,8 @@ defaultMessageViewState =
     , afterExpandedPaths = Set.singleton ""
     , effectExpandedPaths = Dict.empty
     , payloadExpandedPaths = Set.singleton ""
+    , startedSubExpandedPaths = Set.singleton ""
+    , stoppedSubExpandedPaths = Set.singleton ""
     }
 
 
@@ -109,6 +113,8 @@ messageViewStateWithChanges changedPaths =
     , afterExpandedPaths = expandedPaths
     , effectExpandedPaths = Dict.empty
     , payloadExpandedPaths = Set.singleton ""
+    , startedSubExpandedPaths = Set.singleton ""
+    , stoppedSubExpandedPaths = Set.singleton ""
     }
 
 
@@ -308,14 +314,17 @@ type Msg
     | SelectNextMessage
     | SelectPreviousMessage
       -- View Options
-    | ToggleShowPreviousState
-    | ToggleShowChangedValues
+    | ShowPreviousState
+    | HidePreviousState
+    | ShowChangedValues
+    | HideChangedValues
     | SetDisplayOrder DisplayOrder
       -- Search
     | SetSearchQuery String
-    | NextMatch
-    | PreviousMatch
-    | ToggleFilter
+    | SelectNextMatch
+    | SelectPreviousMatch
+    | EnableFilter
+    | DisableFilter
     | FocusSearch
     | NoOp
       -- Tree View (After state)
@@ -323,12 +332,12 @@ type Msg
       -- Tree View (Before state - for split view)
     | BeforeTreeViewMsg TreeView.Msg
       -- Diff View
-    | DiffToggleExpand (List String)
+    | SetDiffExpanded (List String) Bool
       -- Unified View (before/after without diff highlighting)
-    | BeforeToggleExpand (List String)
-    | AfterToggleExpand (List String)
+    | SetBeforeExpanded (List String) Bool
+    | SetAfterExpanded (List String) Bool
       -- Filter View
-    | FilterToggleExpand (List String)
+    | SetFilterExpanded (List String) Bool
       -- Collapse/Expand All
     | CollapseAllBefore
     | ExpandAllBefore
@@ -337,13 +346,16 @@ type Msg
     | CollapseAllFilter
     | ExpandAllFilter
       -- Effect Tree View
-    | EffectToggleExpand Int (List String)
+    | SetEffectExpanded Int (List String) Bool
     | CollapseAllEffect Int
     | ExpandAllEffect Int
       -- Message Payload Tree View
-    | PayloadToggleExpand (List String)
+    | SetPayloadExpanded (List String) Bool
     | CollapseAllPayload
     | ExpandAllPayload
+      -- Subscription Tree View
+    | SetStartedSubscriptionsExpanded (List String) Bool
+    | SetStoppedSubscriptionsExpanded (List String) Bool
       -- Port Communication
     | GotPortMessage E.Value
       -- Error Handling
@@ -700,13 +712,23 @@ update msg model =
                 ( newModel, Cmd.batch [ cmd, scrollCmd, focusCmd ] )
 
         -- View Options
-        ToggleShowPreviousState ->
-            ( { model | showPreviousState = not model.showPreviousState }
+        ShowPreviousState ->
+            ( { model | showPreviousState = True }
             , Cmd.none
             )
 
-        ToggleShowChangedValues ->
-            ( { model | showChangedValues = not model.showChangedValues }
+        HidePreviousState ->
+            ( { model | showPreviousState = False }
+            , Cmd.none
+            )
+
+        ShowChangedValues ->
+            ( { model | showChangedValues = True }
+            , Cmd.none
+            )
+
+        HideChangedValues ->
+            ( { model | showChangedValues = False }
             , Cmd.none
             )
 
@@ -756,7 +778,7 @@ update msg model =
             , Cmd.none
             )
 
-        NextMatch ->
+        SelectNextMatch ->
             let
                 totalMatches =
                     model.searchResult.totalMatchCount
@@ -782,7 +804,7 @@ update msg model =
             , scrollCmd
             )
 
-        PreviousMatch ->
+        SelectPreviousMatch ->
             let
                 totalMatches =
                     model.searchResult.totalMatchCount
@@ -808,8 +830,13 @@ update msg model =
             , scrollCmd
             )
 
-        ToggleFilter ->
-            ( { model | filterActive = not model.filterActive }
+        EnableFilter ->
+            ( { model | filterActive = True }
+            , Cmd.none
+            )
+
+        DisableFilter ->
+            ( { model | filterActive = False }
             , Cmd.none
             )
 
@@ -834,77 +861,77 @@ update msg model =
             )
 
         -- Diff View (uses afterExpandedPaths to share state with non-diff view)
-        DiffToggleExpand path ->
+        SetDiffExpanded path expanded ->
             let
                 pathKey =
                     String.join "." path
 
-                toggleAfterPath state =
+                setAfterPath state =
                     { state
                         | afterExpandedPaths =
-                            if Set.member pathKey state.afterExpandedPaths then
-                                Set.remove pathKey state.afterExpandedPaths
+                            if expanded then
+                                Set.insert pathKey state.afterExpandedPaths
 
                             else
-                                Set.insert pathKey state.afterExpandedPaths
+                                Set.remove pathKey state.afterExpandedPaths
                     }
             in
-            ( updateMessageViewState toggleAfterPath model
+            ( updateMessageViewState setAfterPath model
             , Cmd.none
             )
 
         -- Unified View (before panel)
-        BeforeToggleExpand path ->
+        SetBeforeExpanded path expanded ->
             let
                 pathKey =
                     String.join "." path
 
-                toggleBeforePath state =
+                setBeforePath state =
                     { state
                         | beforeExpandedPaths =
-                            if Set.member pathKey state.beforeExpandedPaths then
-                                Set.remove pathKey state.beforeExpandedPaths
+                            if expanded then
+                                Set.insert pathKey state.beforeExpandedPaths
 
                             else
-                                Set.insert pathKey state.beforeExpandedPaths
+                                Set.remove pathKey state.beforeExpandedPaths
                     }
             in
-            ( updateMessageViewState toggleBeforePath model
+            ( updateMessageViewState setBeforePath model
             , Cmd.none
             )
 
         -- Unified View (after panel when not highlighting)
-        AfterToggleExpand path ->
+        SetAfterExpanded path expanded ->
             let
                 pathKey =
                     String.join "." path
 
-                toggleAfterPath state =
+                setAfterPath state =
                     { state
                         | afterExpandedPaths =
-                            if Set.member pathKey state.afterExpandedPaths then
-                                Set.remove pathKey state.afterExpandedPaths
+                            if expanded then
+                                Set.insert pathKey state.afterExpandedPaths
 
                             else
-                                Set.insert pathKey state.afterExpandedPaths
+                                Set.remove pathKey state.afterExpandedPaths
                     }
             in
-            ( updateMessageViewState toggleAfterPath model
+            ( updateMessageViewState setAfterPath model
             , Cmd.none
             )
 
         -- Filter View
-        FilterToggleExpand path ->
+        SetFilterExpanded path expanded ->
             let
                 pathKey =
                     String.join "." path
 
                 newExpandedPaths =
-                    if Set.member pathKey model.filterExpandedPaths then
-                        Set.remove pathKey model.filterExpandedPaths
+                    if expanded then
+                        Set.insert pathKey model.filterExpandedPaths
 
                     else
-                        Set.insert pathKey model.filterExpandedPaths
+                        Set.remove pathKey model.filterExpandedPaths
             in
             ( { model | filterExpandedPaths = newExpandedPaths }
             , Cmd.none
@@ -975,27 +1002,27 @@ update msg model =
             )
 
         -- Effect Tree View
-        EffectToggleExpand effectIndex path ->
+        SetEffectExpanded effectIndex path expanded ->
             let
                 pathKey =
                     String.join "." path
 
-                toggleEffectPath state =
+                setEffectPath state =
                     let
                         currentPaths =
                             Dict.get effectIndex state.effectExpandedPaths
                                 |> Maybe.withDefault (Set.singleton "")
 
                         newPaths =
-                            if Set.member pathKey currentPaths then
-                                Set.remove pathKey currentPaths
+                            if expanded then
+                                Set.insert pathKey currentPaths
 
                             else
-                                Set.insert pathKey currentPaths
+                                Set.remove pathKey currentPaths
                     in
                     { state | effectExpandedPaths = Dict.insert effectIndex newPaths state.effectExpandedPaths }
             in
-            ( updateMessageViewState toggleEffectPath model
+            ( updateMessageViewState setEffectPath model
             , Cmd.none
             )
 
@@ -1035,23 +1062,23 @@ update msg model =
             )
 
         -- Message Payload Tree View
-        PayloadToggleExpand path ->
+        SetPayloadExpanded path expanded ->
             let
                 pathKey =
                     String.join "." path
 
-                togglePayloadPath state =
+                setPayloadPath state =
                     let
                         newPaths =
-                            if Set.member pathKey state.payloadExpandedPaths then
-                                Set.remove pathKey state.payloadExpandedPaths
+                            if expanded then
+                                Set.insert pathKey state.payloadExpandedPaths
 
                             else
-                                Set.insert pathKey state.payloadExpandedPaths
+                                Set.remove pathKey state.payloadExpandedPaths
                     in
                     { state | payloadExpandedPaths = newPaths }
             in
-            ( updateMessageViewState togglePayloadPath model
+            ( updateMessageViewState setPayloadPath model
             , Cmd.none
             )
 
@@ -1080,6 +1107,47 @@ update msg model =
                     { state | payloadExpandedPaths = Set.insert "" allPaths }
             in
             ( updateMessageViewState expandPayload model
+            , Cmd.none
+            )
+
+        -- Subscription Tree View
+        SetStartedSubscriptionsExpanded path expanded ->
+            let
+                pathKey =
+                    String.join "." path
+
+                setPath state =
+                    let
+                        newPaths =
+                            if expanded then
+                                Set.insert pathKey state.startedSubExpandedPaths
+
+                            else
+                                Set.remove pathKey state.startedSubExpandedPaths
+                    in
+                    { state | startedSubExpandedPaths = newPaths }
+            in
+            ( updateMessageViewState setPath model
+            , Cmd.none
+            )
+
+        SetStoppedSubscriptionsExpanded path expanded ->
+            let
+                pathKey =
+                    String.join "." path
+
+                setPath state =
+                    let
+                        newPaths =
+                            if expanded then
+                                Set.insert pathKey state.stoppedSubExpandedPaths
+
+                            else
+                                Set.remove pathKey state.stoppedSubExpandedPaths
+                    in
+                    { state | stoppedSubExpandedPaths = newPaths }
+            in
+            ( updateMessageViewState setPath model
             , Cmd.none
             )
 
@@ -2134,7 +2202,13 @@ viewViewOptions model =
                         [ type_ "checkbox"
                         , class "checkbox checkbox-sm"
                         , checked model.showPreviousState
-                        , onClick ToggleShowPreviousState
+                        , onClick
+                            (if model.showPreviousState then
+                                HidePreviousState
+
+                             else
+                                ShowPreviousState
+                            )
                         ]
                         []
                     , span [ class "label-text text-sm" ] [ text "Show previous state" ]
@@ -2144,7 +2218,13 @@ viewViewOptions model =
                         [ type_ "checkbox"
                         , class "checkbox checkbox-sm"
                         , checked model.showChangedValues
-                        , onClick ToggleShowChangedValues
+                        , onClick
+                            (if model.showChangedValues then
+                                HideChangedValues
+
+                             else
+                                ShowChangedValues
+                            )
                         ]
                         []
                     , span [ class "label-text text-sm" ] [ text "Highlight changes" ]
@@ -2199,7 +2279,7 @@ viewSearchBox model =
             [ div [ class "tooltip tooltip-bottom", attribute "data-tip" "Previous match (Shift+Enter)" ]
                 [ button
                     [ class "btn btn-ghost btn-xs px-1"
-                    , onClick PreviousMatch
+                    , onClick SelectPreviousMatch
                     , disabled (not hasMatches)
                     ]
                     [ text "▲" ]
@@ -2207,7 +2287,7 @@ viewSearchBox model =
             , div [ class "tooltip tooltip-bottom", attribute "data-tip" "Next match (Enter)" ]
                 [ button
                     [ class "btn btn-ghost btn-xs px-1"
-                    , onClick NextMatch
+                    , onClick SelectNextMatch
                     , disabled (not hasMatches)
                     ]
                     [ text "▼" ]
@@ -2219,7 +2299,13 @@ viewSearchBox model =
                 [ type_ "checkbox"
                 , class "toggle toggle-sm"
                 , checked model.filterActive
-                , onClick ToggleFilter
+                , onClick
+                    (if model.filterActive then
+                        DisableFilter
+
+                     else
+                        EnableFilter
+                    )
                 ]
                 []
             ]
@@ -2232,10 +2318,10 @@ searchKeyDecoder =
         (\key shiftKey ->
             if key == "Enter" then
                 if shiftKey then
-                    ( PreviousMatch, True )
+                    ( SelectPreviousMatch, True )
 
                 else
-                    ( NextMatch, True )
+                    ( SelectNextMatch, True )
 
             else
                 ( NoOp, False )
@@ -2251,8 +2337,8 @@ viewNoSelection model =
     div [ class "h-full flex items-center justify-center" ]
         [ div [ class "text-center text-base-content/60" ]
             (if Array.isEmpty model.logEntries then
-                [ div [ class "text-5xl mb-4" ] [ text "📂" ]
-                , p [ class "text-lg font-medium" ] [ text "No file loaded" ]
+                [ div [ class "text-5xl mb-4" ] [ i [ class "fa-solid fa-comments" ] [] ]
+                , p [ class "text-lg font-medium" ] [ text "No Messages Loaded" ]
                 , p [ class "text-sm mt-2" ] [ text "Open a file or connect to a WebSocket to begin" ]
                 ]
 
@@ -2280,7 +2366,7 @@ viewSelectedEntry model index entry =
             viewUpdateEntry model index data
 
         SubscriptionChangeEntry data ->
-            viewSubscriptionEntry data
+            viewSubscriptionEntry model data
 
 
 {-| Render an error entry.
@@ -2319,7 +2405,7 @@ viewInitEntry model index data =
             ]
         , div [ class "flex-1 overflow-auto p-4" ]
             [ TreeView.viewUnified
-                { onToggleExpand = AfterToggleExpand
+                { onToggleExpand = SetAfterExpanded
                 , searchMatches = model.searchResult.afterPathsWithMatches
                 , currentMatchPath = currentMatchPath
                 }
@@ -2346,8 +2432,26 @@ viewUpdateEntry model index data =
 
 {-| Render a subscription change entry.
 -}
-viewSubscriptionEntry : SubscriptionChangeData -> Html Msg
-viewSubscriptionEntry data =
+viewSubscriptionEntry : Model -> SubscriptionChangeData -> Html Msg
+viewSubscriptionEntry model data =
+    let
+        viewState =
+            getMessageViewState model
+
+        startedConfig : TreeView.UnifiedConfig Msg
+        startedConfig =
+            { onToggleExpand = SetStartedSubscriptionsExpanded
+            , searchMatches = Set.empty
+            , currentMatchPath = Nothing
+            }
+
+        stoppedConfig : TreeView.UnifiedConfig Msg
+        stoppedConfig =
+            { onToggleExpand = SetStoppedSubscriptionsExpanded
+            , searchMatches = Set.empty
+            , currentMatchPath = Nothing
+            }
+    in
     div [ class "bg-base-100 rounded-lg border border-base-300 p-4" ]
         [ h3 [ class "font-semibold text-base mb-4" ] [ text "Subscription Change" ]
         , div [ class "grid grid-cols-2 gap-4" ]
@@ -2357,8 +2461,8 @@ viewSubscriptionEntry data =
                     p [ class "text-sm text-base-content/60" ] [ text "None" ]
 
                   else
-                    ul [ class "text-sm space-y-1" ]
-                        (List.map (\v -> li [] [ text (E.encode 0 v) ]) data.started)
+                    div [ class "text-sm" ]
+                        [ TreeView.viewUnified startedConfig (E.list identity data.started) viewState.startedSubExpandedPaths ]
                 ]
             , div []
                 [ h4 [ class "font-medium text-error mb-2" ] [ text "Stopped" ]
@@ -2366,8 +2470,8 @@ viewSubscriptionEntry data =
                     p [ class "text-sm text-base-content/60" ] [ text "None" ]
 
                   else
-                    ul [ class "text-sm space-y-1" ]
-                        (List.map (\v -> li [] [ text (E.encode 0 v) ]) data.stopped)
+                    div [ class "text-sm" ]
+                        [ TreeView.viewUnified stoppedConfig (E.list identity data.stopped) viewState.stoppedSubExpandedPaths ]
                 ]
             ]
         ]
@@ -2402,7 +2506,7 @@ viewSingleStateMode model index data =
                 { visiblePaths = visiblePaths
                 , matchingPaths = model.searchResult.afterPathsWithMatches
                 , currentMatchPath = currentMatchPath
-                , onToggleExpand = FilterToggleExpand
+                , onToggleExpand = SetFilterExpanded
                 }
         in
         div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
@@ -2427,7 +2531,7 @@ viewSingleStateMode model index data =
                 { changedPaths = model.changedPaths
                 , changes = treeViewChanges
                 , changesOnly = False
-                , onToggleExpand = DiffToggleExpand
+                , onToggleExpand = SetDiffExpanded
                 , searchMatches = model.searchResult.afterPathsWithMatches
                 , currentMatchPath = currentMatchPath
                 }
@@ -2459,7 +2563,7 @@ viewSingleStateMode model index data =
                 ]
             , div [ class "flex-1 overflow-auto p-4" ]
                 [ TreeView.viewUnified
-                    { onToggleExpand = AfterToggleExpand
+                    { onToggleExpand = SetAfterExpanded
                     , searchMatches = model.searchResult.afterPathsWithMatches
                     , currentMatchPath = currentMatchPath
                     }
@@ -2496,7 +2600,7 @@ viewSplitMode model index data isFirstMessage =
             { changedPaths = model.changedPaths
             , changes = treeViewChanges
             , changesOnly = False
-            , onToggleExpand = DiffToggleExpand
+            , onToggleExpand = SetDiffExpanded
             , searchMatches = model.searchResult.afterPathsWithMatches
             , currentMatchPath = currentMatchPath
             }
@@ -2504,7 +2608,7 @@ viewSplitMode model index data isFirstMessage =
         beforeDiffConfig =
             { changedPaths = model.changedPaths
             , changes = treeViewChanges
-            , onToggleExpand = BeforeToggleExpand
+            , onToggleExpand = SetBeforeExpanded
             , searchMatches = model.searchResult.beforePathsWithMatches
             , currentMatchPath = currentMatchPath
             }
@@ -2516,7 +2620,7 @@ viewSplitMode model index data isFirstMessage =
             { visiblePaths = visiblePathsAfter
             , matchingPaths = model.searchResult.afterPathsWithMatches
             , currentMatchPath = currentMatchPath
-            , onToggleExpand = FilterToggleExpand
+            , onToggleExpand = SetFilterExpanded
             }
 
         visiblePathsBefore =
@@ -2526,20 +2630,20 @@ viewSplitMode model index data isFirstMessage =
             { visiblePaths = visiblePathsBefore
             , matchingPaths = model.searchResult.beforePathsWithMatches
             , currentMatchPath = currentMatchPath
-            , onToggleExpand = FilterToggleExpand
+            , onToggleExpand = SetFilterExpanded
             }
 
         matchCount =
             model.searchResult.totalMatchCount
 
         unifiedConfigBefore =
-            { onToggleExpand = BeforeToggleExpand
+            { onToggleExpand = SetBeforeExpanded
             , searchMatches = model.searchResult.beforePathsWithMatches
             , currentMatchPath = currentMatchPath
             }
 
         unifiedConfigAfter =
-            { onToggleExpand = AfterToggleExpand
+            { onToggleExpand = SetAfterExpanded
             , searchMatches = model.searchResult.afterPathsWithMatches
             , currentMatchPath = currentMatchPath
             }
@@ -2723,7 +2827,7 @@ viewMessageDetails model data =
 
         config : TreeView.UnifiedConfig Msg
         config =
-            { onToggleExpand = PayloadToggleExpand
+            { onToggleExpand = SetPayloadExpanded
             , searchMatches = model.searchResult.payloadPathsWithMatches
             , currentMatchPath = currentMatchPath
             }
@@ -2821,7 +2925,7 @@ viewEffectItem model effectExpandedPaths index effect =
 
         config : TreeView.UnifiedConfig Msg
         config =
-            { onToggleExpand = EffectToggleExpand index
+            { onToggleExpand = SetEffectExpanded index
             , searchMatches = effectDataMatches
             , currentMatchPath = currentMatchPath
             }

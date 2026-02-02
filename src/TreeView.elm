@@ -83,7 +83,7 @@ type Change
   - `changedPaths`: List of paths that have changed
   - `changes`: Dictionary mapping path strings to change types
   - `changesOnly`: Whether to filter and show only changed paths
-  - `onToggleExpand`: Callback when a node is expanded/collapsed
+  - `onToggleExpand`: Callback when a node is expanded/collapsed (path, new expanded state)
   - `searchMatches`: Set of paths that match the search query (for highlighting)
   - `currentMatchPath`: The path of the current search match (for special highlighting)
 
@@ -92,7 +92,7 @@ type alias DiffConfig msg =
     { changedPaths : List (List String)
     , changes : Dict String Change
     , changesOnly : Bool
-    , onToggleExpand : List String -> msg
+    , onToggleExpand : List String -> Bool -> msg
     , searchMatches : Set String
     , currentMatchPath : Maybe String
     }
@@ -103,14 +103,14 @@ type alias DiffConfig msg =
   - `visiblePaths`: Set of path strings that should be visible
   - `matchingPaths`: Set of paths that directly match the search (for highlighting)
   - `currentMatchPath`: The path of the current search match (for special highlighting)
-  - `onToggleExpand`: Callback when a node is expanded/collapsed
+  - `onToggleExpand`: Callback when a node is expanded/collapsed (path, new expanded state)
 
 -}
 type alias FilterConfig msg =
     { visiblePaths : Set String
     , matchingPaths : Set String
     , currentMatchPath : Maybe String
-    , onToggleExpand : List String -> msg
+    , onToggleExpand : List String -> Bool -> msg
     }
 
 
@@ -118,13 +118,13 @@ type alias FilterConfig msg =
 
 This uses the same styling as the diff view but without change highlighting.
 
-  - `onToggleExpand`: Callback when a node is expanded/collapsed
+  - `onToggleExpand`: Callback when a node is expanded/collapsed (path, new expanded state)
   - `searchMatches`: Set of paths that match the search query (for highlighting)
   - `currentMatchPath`: The path of the current search match (for special highlighting)
 
 -}
 type alias UnifiedConfig msg =
-    { onToggleExpand : List String -> msg
+    { onToggleExpand : List String -> Bool -> msg
     , searchMatches : Set String
     , currentMatchPath : Maybe String
     }
@@ -298,29 +298,50 @@ viewUnified config jsonValue expandedPaths =
         ]
 
 
-{-| Render the children of the root object directly, skipping the root wrapper.
+{-| Render root children directly, skipping the root wrapper.
+
+Handles both objects (renders key-value pairs) and arrays (renders indexed items).
+
 -}
 viewUnifiedRootChildren : UnifiedConfig msg -> Set String -> D.Value -> Html msg
 viewUnifiedRootChildren config expandedPaths jsonValue =
-    let
-        keys =
-            getObjectKeysWithoutType jsonValue
-    in
-    div [ class "pl-2" ]
-        (List.map
-            (\key ->
-                let
-                    childPath =
-                        [ key ]
-
-                    childValue =
-                        getObjectField key jsonValue
-                            |> Maybe.withDefault E.null
-                in
-                viewUnifiedKeyValue config expandedPaths childPath key childValue
+    if isArray jsonValue then
+        let
+            items =
+                getArrayItems jsonValue
+        in
+        div [ class "pl-2" ]
+            (List.indexedMap
+                (\idx item ->
+                    let
+                        childPath =
+                            [ String.fromInt idx ]
+                    in
+                    viewUnifiedIndexValue config expandedPaths childPath idx item
+                )
+                items
             )
-            keys
-        )
+
+    else
+        let
+            keys =
+                getObjectKeysWithoutType jsonValue
+        in
+        div [ class "pl-2" ]
+            (List.map
+                (\key ->
+                    let
+                        childPath =
+                            [ key ]
+
+                        childValue =
+                            getObjectField key jsonValue
+                                |> Maybe.withDefault E.null
+                    in
+                    viewUnifiedKeyValue config expandedPaths childPath key childValue
+                )
+                keys
+            )
 
 
 {-| Render a single node in the unified tree.
@@ -395,7 +416,7 @@ viewUnifiedObject config expandedPaths currentPath jsonValue =
                         ]
                   ]
                 , [ class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-                  , onClick (config.onToggleExpand currentPath)
+                  , onClick (config.onToggleExpand currentPath (not isExpanded))
                   ]
                 )
 
@@ -467,7 +488,7 @@ viewUnifiedArray config expandedPaths currentPath jsonValue =
         [ div
             [ id elementId
             , class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-            , onClick (config.onToggleExpand currentPath)
+            , onClick (config.onToggleExpand currentPath (not isExpanded))
             ]
             [ span [ class "text-base-content/40 w-4" ]
                 [ text
@@ -760,7 +781,7 @@ viewFilteredObject config expandedPaths currentPath jsonValue highlightClass =
                         ]
                   ]
                 , [ class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-                  , onClick (config.onToggleExpand currentPath)
+                  , onClick (config.onToggleExpand currentPath (not isExpanded))
                   ]
                 )
 
@@ -847,7 +868,7 @@ viewFilteredArray config expandedPaths currentPath jsonValue highlightClass =
         [ div
             [ id elementId
             , class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-            , onClick (config.onToggleExpand currentPath)
+            , onClick (config.onToggleExpand currentPath (not isExpanded))
             ]
             [ span [ class "text-base-content/40 w-4" ]
                 [ text
@@ -988,7 +1009,7 @@ removed fields with removed styling.
 
   - `changedPaths`: List of paths that have changed
   - `changes`: Dictionary mapping path strings to change types
-  - `onToggleExpand`: Callback when a node is expanded/collapsed
+  - `onToggleExpand`: Callback when a node is expanded/collapsed (path, new expanded state)
   - `searchMatches`: Set of paths that match the search query (for highlighting)
   - `currentMatchPath`: The path of the current search match (for special highlighting)
 
@@ -996,7 +1017,7 @@ removed fields with removed styling.
 type alias BeforeDiffConfig msg =
     { changedPaths : List (List String)
     , changes : Dict String Change
-    , onToggleExpand : List String -> msg
+    , onToggleExpand : List String -> Bool -> msg
     , searchMatches : Set String
     , currentMatchPath : Maybe String
     }
@@ -1149,7 +1170,7 @@ viewDiffBeforeObject config expandedPaths currentPath jsonValue highlightClass =
                         ]
                   ]
                 , [ class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-                  , onClick (config.onToggleExpand currentPath)
+                  , onClick (config.onToggleExpand currentPath (not isExpanded))
                   ]
                 )
 
@@ -1218,7 +1239,7 @@ viewDiffBeforeArray config expandedPaths currentPath jsonValue highlightClass =
         [ div
             [ id elementId
             , class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-            , onClick (config.onToggleExpand currentPath)
+            , onClick (config.onToggleExpand currentPath (not isExpanded))
             ]
             [ span [ class "text-base-content/40 w-4" ]
                 [ text
@@ -1629,7 +1650,7 @@ viewDiffObject config expandedPaths visiblePaths currentPath jsonValue highlight
                         ]
                   ]
                 , [ class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-                  , onClick (config.onToggleExpand currentPath)
+                  , onClick (config.onToggleExpand currentPath (not isExpanded))
                   ]
                 )
 
@@ -1720,7 +1741,7 @@ viewDiffArray config expandedPaths visiblePaths currentPath jsonValue highlightC
         [ div
             [ id elementId
             , class ("inline-flex items-center gap-1 cursor-pointer hover:bg-base-200 rounded px-1 py-0.5" ++ highlightClass)
-            , onClick (config.onToggleExpand currentPath)
+            , onClick (config.onToggleExpand currentPath (not isExpanded))
             ]
             [ span [ class "text-base-content/40 w-4" ]
                 [ text

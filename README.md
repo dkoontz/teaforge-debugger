@@ -34,10 +34,22 @@ TeaForge Debugger helps you understand what's happening in your application by l
 
 View the commands (effects) produced by each message. The effects panel shows HTTP requests, navigation commands, and other side effects your application triggered.
 
+### Live Streaming via WebSocket
+
+Connect to a running application in real-time via WebSocket. Instead of loading a static log file, you can stream log entries as they happen:
+
+1. Click the "WebSocket" button in the app
+2. Enter the WebSocket URL of your instrumented application
+3. Watch messages arrive in real-time as your application runs
+
+The app remembers your recent WebSocket URLs for quick reconnection.
+
 ## Getting Started
 
 1. Download the application for your platform from the [Releases](https://github.com/teaforge/teaforge-debugger/releases) page
-2. Open a TeaForge log file (`.jsonl`) via File > Open or `Meta+O`
+2. Load log data using one of these methods:
+   - Open a log file (`.jsonl`) via File > Open or `Meta+O`
+   - Connect to a live WebSocket stream via the "WebSocket" button
 3. Select a message from the sidebar to inspect its state
 
 ## Keyboard Shortcuts

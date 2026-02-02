@@ -138,7 +138,7 @@ src/
 ├── Diff.elm         # State diffing between before/after
 ├── Search.elm       # Search through state tree
 ├── MessageList.elm  # Sidebar message list component
-└── Ports.elm        # Elm-JS port definitions
+└── Ports.elm        # Elm-JS port definitions (file ops, WebSocket control)
 ```
 
 ### Electron Process Architecture
@@ -147,11 +147,20 @@ src/
 - `index.html` - Renderer: loads Elm app, wires ports
 
 ### Data Flow
+
+**File-based flow:**
 1. User opens file via menu (Cmd+O) or button
 2. Electron main process reads file, sends content via IPC
 3. JS bridges to Elm via `incoming` port
 4. `LogParser` decodes JSONL into `List LogEntry`
 5. User selects entry to view state before/after/diff
+
+**WebSocket flow:**
+1. User clicks "WebSocket" button and enters URL
+2. JS creates WebSocket connection to the server
+3. Each message received is parsed as JSON and sent to Elm via `incoming` port
+4. Entries are appended incrementally to the log
+5. User can view entries as they arrive in real-time
 
 ### Log File Format (JSONL)
 

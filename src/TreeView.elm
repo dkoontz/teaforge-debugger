@@ -36,6 +36,7 @@ supports filtering to show only changed paths.
 -}
 
 import Dict exposing (Dict)
+import Filter
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick)
@@ -86,6 +87,7 @@ type Change
   - `onToggleExpand`: Callback when a node is expanded/collapsed (path, new expanded state)
   - `searchMatches`: Set of paths that match the search query (for highlighting)
   - `currentMatchPath`: The path of the current search match (for special highlighting)
+  - `onQuickAddFilter`: Optional callback for quick-add filter icons (path, value as string)
 
 -}
 type alias DiffConfig msg =
@@ -95,6 +97,7 @@ type alias DiffConfig msg =
     , onToggleExpand : List String -> Bool -> msg
     , searchMatches : Set String
     , currentMatchPath : Maybe String
+    , onQuickAddFilter : Maybe (List String -> String -> msg)
     }
 
 
@@ -121,12 +124,14 @@ This uses the same styling as the diff view but without change highlighting.
   - `onToggleExpand`: Callback when a node is expanded/collapsed (path, new expanded state)
   - `searchMatches`: Set of paths that match the search query (for highlighting)
   - `currentMatchPath`: The path of the current search match (for special highlighting)
+  - `onQuickAddFilter`: Optional callback for quick-add filter icons (path, value as string)
 
 -}
 type alias UnifiedConfig msg =
     { onToggleExpand : List String -> Bool -> msg
     , searchMatches : Set String
     , currentMatchPath : Maybe String
+    , onQuickAddFilter : Maybe (List String -> String -> msg)
     }
 
 
@@ -544,10 +549,11 @@ viewUnifiedKeyValue config expandedPaths currentPath key childValue =
 
         _ ->
             div [ class "tree-node pl-2" ]
-                [ div [ id elementId, class ("inline-flex items-center gap-1 py-0.5 px-1 rounded" ++ highlightClass) ]
+                [ div [ id elementId, class ("inline-flex items-center gap-1 py-0.5 px-1 rounded group/filter" ++ highlightClass) ]
                     [ span [ class "text-base-content/40 w-4" ] [ text "" ]
                     , span [ class "text-secondary" ] [ text (key ++ ":") ]
                     , viewPrimitiveValue childValue
+                    , viewQuickAddFilterIcon config currentPath childValue
                     ]
                 ]
 
@@ -612,6 +618,43 @@ viewUnifiedPrimitive config currentPath jsonValue =
             text ""
         , viewPrimitiveValue jsonValue
         ]
+
+
+
+{-| Render a quick-add filter icon given an optional callback.
+-}
+viewMaybeQuickAddFilterIcon : Maybe (List String -> String -> msg) -> List String -> D.Value -> Html msg
+viewMaybeQuickAddFilterIcon maybeCallback currentPath jsonValue =
+    case maybeCallback of
+        Just callback ->
+            let
+                valueStr =
+                    primitiveValueToString jsonValue
+            in
+            span
+                [ class "opacity-0 group-hover/filter:opacity-100 transition-opacity cursor-pointer text-base-content/30 hover:text-primary ml-0.5"
+                , onClick (callback currentPath valueStr)
+                , Html.Attributes.title "Add as filter"
+                ]
+                [ Html.i [ class "fa-solid fa-filter text-[9px]" ] [] ]
+
+        Nothing ->
+            text ""
+
+
+{-| Render a quick-add filter icon if the unified config has a callback.
+-}
+viewQuickAddFilterIcon : UnifiedConfig msg -> List String -> D.Value -> Html msg
+viewQuickAddFilterIcon config =
+    viewMaybeQuickAddFilterIcon config.onQuickAddFilter
+
+
+{-| Convert a primitive JSON value to a string for filter pre-population.
+-}
+primitiveValueToString : D.Value -> String
+primitiveValueToString jsonValue =
+    Filter.primitiveValueToString jsonValue
+        |> Maybe.withDefault (E.encode 0 jsonValue)
 
 
 
@@ -1012,6 +1055,7 @@ removed fields with removed styling.
   - `onToggleExpand`: Callback when a node is expanded/collapsed (path, new expanded state)
   - `searchMatches`: Set of paths that match the search query (for highlighting)
   - `currentMatchPath`: The path of the current search match (for special highlighting)
+  - `onQuickAddFilter`: Optional callback for quick-add filter icons (path, value as string)
 
 -}
 type alias BeforeDiffConfig msg =
@@ -1020,6 +1064,7 @@ type alias BeforeDiffConfig msg =
     , onToggleExpand : List String -> Bool -> msg
     , searchMatches : Set String
     , currentMatchPath : Maybe String
+    , onQuickAddFilter : Maybe (List String -> String -> msg)
     }
 
 
@@ -1318,10 +1363,11 @@ viewDiffBeforeKeyValue config expandedPaths currentPath key childValue =
 
         _ ->
             div [ class "tree-node pl-2" ]
-                [ div [ id elementId, class ("inline-flex items-center gap-1 py-0.5 px-1 rounded" ++ highlightClass) ]
+                [ div [ id elementId, class ("inline-flex items-center gap-1 py-0.5 px-1 rounded group/filter" ++ highlightClass) ]
                     [ span [ class "text-base-content/40 w-4" ] [ text "" ]
                     , span [ class "text-secondary" ] [ text (key ++ ":") ]
                     , viewPrimitiveValue childValue
+                    , viewMaybeQuickAddFilterIcon config.onQuickAddFilter currentPath childValue
                     ]
                 ]
 
@@ -1820,10 +1866,11 @@ viewDiffKeyValue config expandedPaths visiblePaths currentPath key childValue =
 
         _ ->
             div [ class "tree-node pl-2" ]
-                [ div [ id elementId, class ("inline-flex items-center gap-1 py-0.5 px-1 rounded" ++ highlightClass) ]
+                [ div [ id elementId, class ("inline-flex items-center gap-1 py-0.5 px-1 rounded group/filter" ++ highlightClass) ]
                     [ span [ class "text-base-content/40 w-4" ] [ text "" ]
                     , span [ class "text-secondary" ] [ text (key ++ ":") ]
                     , viewPrimitiveValue childValue
+                    , viewMaybeQuickAddFilterIcon config.onQuickAddFilter currentPath childValue
                     ]
                 ]
 

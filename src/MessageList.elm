@@ -8,8 +8,8 @@ module MessageList exposing
 {-| Message list component for the TeaForge Debugger sidebar.
 
 This module provides a DaisyUI-styled menu component for displaying
-log entries in chronological order. It handles selection state and
-provides callback configuration for user interactions.
+log entries in chronological order. It handles selection state,
+filtering, and provides callback configuration for user interactions.
 
 @docs Config, view, viewEmpty, viewItem
 
@@ -19,6 +19,7 @@ import Array exposing (Array)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
+import Set exposing (Set)
 import Types exposing (DisplayOrder(..), LogEntry(..), getMessageName, getTimestamp)
 
 
@@ -28,6 +29,8 @@ import Types exposing (DisplayOrder(..), LogEntry(..), getMessageName, getTimest
   - `onSelect`: Callback when a message is selected
   - `entries`: Array of log entries to display
   - `displayOrder`: How to order messages (newest or oldest first)
+  - `visibleIndices`: Set of indices to show (empty = show all)
+  - `isFiltered`: Whether filtering is active
 
 -}
 type alias Config msg =
@@ -35,6 +38,8 @@ type alias Config msg =
     , onSelect : Int -> msg
     , entries : Array LogEntry
     , displayOrder : DisplayOrder
+    , visibleIndices : Set Int
+    , isFiltered : Bool
     }
 
 
@@ -45,6 +50,7 @@ Displays messages based on the configured display order:
   - ReverseChronological: newest at top (default)
   - Chronological: oldest at top
 
+When filtering is active, only visible indices are shown.
 Uses DaisyUI menu component styling.
 
 -}
@@ -55,30 +61,29 @@ view config =
 
     else
         let
-            totalCount =
-                Array.length config.entries
-
-            -- Build list of (displayIndex, originalIndex, entry) tuples
+            -- Build list of (originalIndex, entry) tuples
             indexedEntries =
                 Array.toIndexedList config.entries
 
+            -- Filter to only visible entries when filtering is active
+            filteredEntries =
+                if config.isFiltered then
+                    List.filter (\( idx, _ ) -> Set.member idx config.visibleIndices) indexedEntries
+
+                else
+                    indexedEntries
+
             -- For ReverseChronological: reverse entries (newest first)
             -- For Chronological: keep original order (oldest first)
-            ( displayEntries, indexMapper ) =
+            displayEntries =
                 case config.displayOrder of
                     ReverseChronological ->
-                        -- Reverse entries, map display index back to original
-                        ( List.reverse indexedEntries
-                        , \displayIndex -> totalCount - 1 - displayIndex
-                        )
+                        List.reverse filteredEntries
 
                     Chronological ->
-                        -- Keep original order, display index equals original index
-                        ( indexedEntries
-                        , \displayIndex -> displayIndex
-                        )
+                        filteredEntries
 
-            viewItemWithDisplayIndex displayIndex ( originalIndex, entry ) =
+            viewItemWithDisplayIndex _ ( originalIndex, entry ) =
                 viewItem config.selectedIndex config.onSelect originalIndex entry
         in
         ul [ class "flex flex-col gap-1 p-2 flex-1 overflow-y-auto overflow-x-hidden min-w-0" ]

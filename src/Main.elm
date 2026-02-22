@@ -15,6 +15,15 @@ import Browser.Events
 import CompressionDict exposing (Compression)
 import Dict exposing (Dict)
 import Diff
+import Filter
+    exposing
+        ( ActiveFilter
+        , EditingFilter(..)
+        , Filter(..)
+        , FilterCategory(..)
+        , FilterStatus(..)
+        )
+import FilterSidebar
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
@@ -186,8 +195,6 @@ type alias Model =
     , searchQuery : String
     , searchResult : Search.EntrySearchResult
     , currentMatchIndex : Int
-    , filterActive : Bool
-    , filterExpandedPaths : Set String
     , sidebarWidth : Int
     , isResizingSidebar : Bool
     , errorMessage : Maybe String
@@ -200,6 +207,13 @@ type alias Model =
     , showWsModal : Bool
     , wsUrlInput : String
     , recentWsUrls : List String
+
+    -- Advanced filter state
+    , activeFilters : List ActiveFilter
+    , filterSidebarOpen : Bool
+    , filtersGlobalEnabled : Bool
+    , filterEditing : Maybe ( Maybe Int, EditingFilter )
+    , filteredIndices : Set Int
     }
 
 
@@ -251,8 +265,6 @@ init flagsValue =
       , searchQuery = ""
       , searchResult = Search.emptyEntrySearchResult
       , currentMatchIndex = 0
-      , filterActive = False
-      , filterExpandedPaths = Set.singleton ""
       , sidebarWidth = initialSidebarWidth
       , isResizingSidebar = False
       , errorMessage = Nothing
@@ -265,6 +277,11 @@ init flagsValue =
       , showWsModal = False
       , wsUrlInput = ""
       , recentWsUrls = initialRecentWsUrls
+      , activeFilters = []
+      , filterSidebarOpen = False
+      , filtersGlobalEnabled = True
+      , filterEditing = Nothing
+      , filteredIndices = Set.empty
       }
     , Cmd.none
     )
@@ -323,10 +340,11 @@ type Msg
     | SetSearchQuery String
     | SelectNextMatch
     | SelectPreviousMatch
-    | EnableFilter
-    | DisableFilter
     | FocusSearch
     | NoOp
+      -- Advanced Filters
+    | FilterSidebarMsg FilterSidebar.Msg
+    | QuickAddFilter Filter
       -- Tree View (After state)
     | TreeViewMsg TreeView.Msg
       -- Tree View (Before state - for split view)
@@ -336,15 +354,11 @@ type Msg
       -- Unified View (before/after without diff highlighting)
     | SetBeforeExpanded (List String) Bool
     | SetAfterExpanded (List String) Bool
-      -- Filter View
-    | SetFilterExpanded (List String) Bool
       -- Collapse/Expand All
     | CollapseAllBefore
     | ExpandAllBefore
     | CollapseAllAfter
     | ExpandAllAfter
-    | CollapseAllFilter
-    | ExpandAllFilter
       -- Effect Tree View
     | SetEffectExpanded Int (List String) Bool
     | CollapseAllEffect Int
@@ -406,6 +420,7 @@ update msg model =
                 , changedPaths = []
                 , changes = Dict.empty
                 , compression = CompressionDict.empty
+                , filteredIndices = Set.empty
               }
             , Cmd.batch
                 [ Ports.openInput path
@@ -521,6 +536,7 @@ update msg model =
                     , changedPaths = []
                     , changes = Dict.empty
                     , compression = CompressionDict.empty
+                    , filteredIndices = Set.empty
                   }
                 , Ports.connectWebSocket url
                 )
@@ -753,27 +769,11 @@ update msg model =
 
                         Nothing ->
                             Search.emptyEntrySearchResult
-
-                -- Turn off filter when search query is blank
-                queryIsBlank =
-                    String.isEmpty (String.trim query)
             in
             ( { model
                 | searchQuery = query
                 , searchResult = newSearchResult
                 , currentMatchIndex = 0
-                , filterActive =
-                    if queryIsBlank then
-                        False
-
-                    else
-                        model.filterActive
-                , filterExpandedPaths =
-                    if queryIsBlank then
-                        Set.singleton ""
-
-                    else
-                        Search.buildVisiblePaths newSearchResult.afterMatches
               }
             , Cmd.none
             )
@@ -828,16 +828,6 @@ update msg model =
             in
             ( { model | currentMatchIndex = newIndex }
             , scrollCmd
-            )
-
-        EnableFilter ->
-            ( { model | filterActive = True }
-            , Cmd.none
-            )
-
-        DisableFilter ->
-            ( { model | filterActive = False }
-            , Cmd.none
             )
 
         FocusSearch ->
@@ -920,23 +910,6 @@ update msg model =
             , Cmd.none
             )
 
-        -- Filter View
-        SetFilterExpanded path expanded ->
-            let
-                pathKey =
-                    String.join "." path
-
-                newExpandedPaths =
-                    if expanded then
-                        Set.insert pathKey model.filterExpandedPaths
-
-                    else
-                        Set.remove pathKey model.filterExpandedPaths
-            in
-            ( { model | filterExpandedPaths = newExpandedPaths }
-            , Cmd.none
-            )
-
         -- Collapse/Expand All
         CollapseAllBefore ->
             ( updateMessageViewState (\state -> { state | beforeExpandedPaths = Set.singleton "" }) model
@@ -977,27 +950,6 @@ update msg model =
                         |> Maybe.withDefault Set.empty
             in
             ( updateMessageViewState (\state -> { state | afterExpandedPaths = Set.insert "" allPaths }) model
-            , Cmd.none
-            )
-
-        CollapseAllFilter ->
-            ( { model | filterExpandedPaths = Set.singleton "" }
-            , Cmd.none
-            )
-
-        ExpandAllFilter ->
-            let
-                maybeAfterState =
-                    model.selectedIndex
-                        |> Maybe.andThen (\idx -> Array.get idx model.logEntries)
-                        |> Maybe.andThen getModelAfter
-
-                allPaths =
-                    maybeAfterState
-                        |> Maybe.map collectAllPaths
-                        |> Maybe.withDefault Set.empty
-            in
-            ( { model | filterExpandedPaths = Set.insert "" allPaths }
             , Cmd.none
             )
 
@@ -1181,6 +1133,241 @@ update msg model =
             , Cmd.none
             )
 
+        -- Advanced Filters
+        FilterSidebarMsg sidebarMsg ->
+            handleFilterSidebarMsg sidebarMsg model
+
+        QuickAddFilter filter ->
+            let
+                newFilter =
+                    { status = Enabled, filter = filter }
+
+                newFilters =
+                    model.activeFilters ++ [ newFilter ]
+
+                newModel =
+                    { model
+                        | activeFilters = newFilters
+                        , filterSidebarOpen = True
+                    }
+            in
+            ( recomputeFilteredIndices newModel, Cmd.none )
+
+
+{-| Handle filter sidebar messages.
+-}
+handleFilterSidebarMsg : FilterSidebar.Msg -> Model -> ( Model, Cmd Msg )
+handleFilterSidebarMsg msg model =
+    case msg of
+        FilterSidebar.ToggleSidebar ->
+            ( { model | filterSidebarOpen = not model.filterSidebarOpen }
+            , Cmd.none
+            )
+
+        FilterSidebar.ToggleGlobalFilters ->
+            let
+                newModel =
+                    { model | filtersGlobalEnabled = not model.filtersGlobalEnabled }
+            in
+            ( recomputeFilteredIndices newModel, Cmd.none )
+
+        FilterSidebar.ToggleCategoryFilters category ->
+            let
+                -- Check if all filters in this category are enabled
+                categoryIsAllEnabled =
+                    List.all
+                        (\af ->
+                            if Filter.filterCategory af.filter == category then
+                                af.status == Enabled
+
+                            else
+                                True
+                        )
+                        model.activeFilters
+
+                newStatus =
+                    if categoryIsAllEnabled then
+                        Disabled
+
+                    else
+                        Enabled
+
+                newFilters =
+                    List.map
+                        (\af ->
+                            if Filter.filterCategory af.filter == category then
+                                { af | status = newStatus }
+
+                            else
+                                af
+                        )
+                        model.activeFilters
+
+                newModel =
+                    { model | activeFilters = newFilters }
+            in
+            ( recomputeFilteredIndices newModel, Cmd.none )
+
+        FilterSidebar.ToggleFilter index ->
+            let
+                newFilters =
+                    List.indexedMap
+                        (\idx af ->
+                            if idx == index then
+                                { af
+                                    | status =
+                                        case af.status of
+                                            Enabled ->
+                                                Disabled
+
+                                            Disabled ->
+                                                Enabled
+                                }
+
+                            else
+                                af
+                        )
+                        model.activeFilters
+
+                newModel =
+                    { model | activeFilters = newFilters }
+            in
+            ( recomputeFilteredIndices newModel, Cmd.none )
+
+        FilterSidebar.DeleteFilter index ->
+            let
+                newFilters =
+                    List.indexedMap Tuple.pair model.activeFilters
+                        |> List.filterMap
+                            (\( idx, af ) ->
+                                if idx == index then
+                                    Nothing
+
+                                else
+                                    Just af
+                            )
+
+                newModel =
+                    { model | activeFilters = newFilters, filterEditing = Nothing }
+            in
+            ( recomputeFilteredIndices newModel, Cmd.none )
+
+        FilterSidebar.StartAddFilter category ->
+            ( { model | filterEditing = Just ( Nothing, Filter.emptyEditingFilter category ) }
+            , Cmd.none
+            )
+
+        FilterSidebar.StartEditFilter index ->
+            case List.head (List.drop index model.activeFilters) of
+                Just af ->
+                    ( { model | filterEditing = Just ( Just index, Filter.editingFilterFromActive af ) }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        FilterSidebar.CancelEdit ->
+            ( { model | filterEditing = Nothing }
+            , Cmd.none
+            )
+
+        FilterSidebar.SaveEdit ->
+            case model.filterEditing of
+                Just ( maybeIdx, editing ) ->
+                    case Filter.editingFilterToFilter editing of
+                        Just newFilter ->
+                            let
+                                newFilters =
+                                    case maybeIdx of
+                                        Nothing ->
+                                            -- Adding new filter
+                                            model.activeFilters ++ [ { status = Enabled, filter = newFilter } ]
+
+                                        Just idx ->
+                                            -- Editing existing filter
+                                            List.indexedMap
+                                                (\i af ->
+                                                    if i == idx then
+                                                        { af | filter = newFilter }
+
+                                                    else
+                                                        af
+                                                )
+                                                model.activeFilters
+
+                                newModel =
+                                    { model
+                                        | activeFilters = newFilters
+                                        , filterEditing = Nothing
+                                    }
+                            in
+                            ( recomputeFilteredIndices newModel, Cmd.none )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        FilterSidebar.UpdateEditingFilter newEditing ->
+            ( { model | filterEditing = Maybe.map (\( idx, _ ) -> ( idx, newEditing )) model.filterEditing }
+            , Cmd.none
+            )
+
+        FilterSidebar.ChangeEditingType newEditing ->
+            ( { model | filterEditing = Maybe.map (\( idx, _ ) -> ( idx, newEditing )) model.filterEditing }
+            , Cmd.none
+            )
+
+
+{-| Recompute the set of filtered indices based on current filters.
+-}
+recomputeFilteredIndices : Model -> Model
+recomputeFilteredIndices model =
+    let
+        enabled =
+            if model.filtersGlobalEnabled then
+                Filter.enabledFilters model.activeFilters
+
+            else
+                []
+
+        indices =
+            if List.isEmpty enabled then
+                -- No filters active, all entries visible
+                Set.fromList (List.range 0 (Array.length model.logEntries - 1))
+
+            else
+                Array.toIndexedList model.logEntries
+                    |> List.filterMap
+                        (\( idx, entry ) ->
+                            if Filter.matchesEntry enabled entry then
+                                Just idx
+
+                            else
+                                Nothing
+                        )
+                    |> Set.fromList
+
+        -- Clear selection if selected entry is no longer visible
+        newSelectedIndex =
+            case model.selectedIndex of
+                Just idx ->
+                    if Set.member idx indices || List.isEmpty enabled then
+                        model.selectedIndex
+
+                    else
+                        Nothing
+
+                Nothing ->
+                    Nothing
+    in
+    { model
+        | filteredIndices = indices
+        , selectedIndex = newSelectedIndex
+    }
+
 
 {-| Handle a received entry from the input source.
 -}
@@ -1322,7 +1509,7 @@ addEntryAndMaybeSelect entry model =
             model.selectedIndex == Nothing && Array.isEmpty model.logEntries
 
         newModel =
-            { model | logEntries = newEntries }
+            recomputeFilteredIndices { model | logEntries = newEntries }
     in
     if shouldAutoSelect then
         update (SelectMessage 0) newModel
@@ -1430,12 +1617,6 @@ selectEntry index entry model =
             else
                 Basics.min model.currentMatchIndex (newSearchResult.totalMatchCount - 1)
                     |> Basics.max 0
-        , filterExpandedPaths =
-            if String.isEmpty model.searchQuery then
-                model.filterExpandedPaths
-
-            else
-                Search.buildVisiblePaths newSearchResult.afterMatches
       }
     , Cmd.none
     )
@@ -1784,6 +1965,20 @@ view model =
                 ]
                 [ viewMainContent model
                 ]
+            , if model.filterSidebarOpen then
+                Html.map FilterSidebarMsg
+                    (FilterSidebar.view
+                        { filters = model.activeFilters
+                        , isOpen = model.filterSidebarOpen
+                        , globalEnabled = model.filtersGlobalEnabled
+                        , editing = model.filterEditing
+                        , totalEntries = Array.length model.logEntries
+                        , visibleEntries = Set.size model.filteredIndices
+                        }
+                    )
+
+              else
+                text ""
             ]
         , viewErrorBanner model
         , viewWsModal model
@@ -1951,13 +2146,46 @@ onMouseDown msg =
 -}
 viewSidebar : Model -> Html Msg
 viewSidebar model =
+    let
+        hasActiveFilters =
+            model.filtersGlobalEnabled && Filter.enabledFilterCount model.activeFilters > 0
+
+        totalCount =
+            Array.length model.logEntries
+
+        visibleCount =
+            if hasActiveFilters then
+                Set.size model.filteredIndices
+
+            else
+                totalCount
+
+        messageCountText =
+            if hasActiveFilters then
+                String.fromInt visibleCount ++ " / " ++ String.fromInt totalCount ++ " messages"
+
+            else
+                String.fromInt totalCount ++ " messages"
+    in
     div [ class "flex flex-col h-full overflow-hidden min-w-0" ]
         [ viewInputSourceHeader model
         , div [ class "p-4 border-b border-base-300 shrink-0" ]
-            [ h2 [ class "font-semibold text-lg" ] [ text "Messages" ]
+            [ div [ class "flex items-center justify-between" ]
+                [ h2 [ class "font-semibold text-lg" ] [ text "Messages" ]
+                , Html.map FilterSidebarMsg
+                    (FilterSidebar.viewToggleButton
+                        { filters = model.activeFilters
+                        , isOpen = model.filterSidebarOpen
+                        , globalEnabled = model.filtersGlobalEnabled
+                        , editing = model.filterEditing
+                        , totalEntries = totalCount
+                        , visibleEntries = visibleCount
+                        }
+                    )
+                ]
             , div [ class "flex flex-nowrap items-center gap-2 mt-1" ]
                 [ span [ class "text-sm text-base-content/60 whitespace-nowrap flex-none" ]
-                    [ text (String.fromInt (Array.length model.logEntries) ++ " messages") ]
+                    [ text messageCountText ]
                 , select
                     [ class "select select-bordered select-xs"
                     , style "width" "auto"
@@ -1989,6 +2217,8 @@ viewSidebar model =
                 , onSelect = SelectMessage
                 , entries = model.logEntries
                 , displayOrder = model.displayOrder
+                , visibleIndices = model.filteredIndices
+                , isFiltered = hasActiveFilters
                 }
             ]
         ]
@@ -2190,7 +2420,7 @@ viewMainContent model =
                         ]
 
 
-{-| Render the view options bar with checkboxes.
+{-| Render the view options bar with checkboxes and search.
 -}
 viewViewOptions : Model -> Html Msg
 viewViewOptions model =
@@ -2257,7 +2487,7 @@ viewSearchBox model =
         [ input
             [ type_ "text"
             , id "search-input"
-            , placeholder "Search... (⌘F)"
+            , placeholder "Search... (\u{2318}F)"
             , class "input input-sm w-40"
             , value model.searchQuery
             , onInput SetSearchQuery
@@ -2282,7 +2512,7 @@ viewSearchBox model =
                     , onClick SelectPreviousMatch
                     , disabled (not hasMatches)
                     ]
-                    [ text "▲" ]
+                    [ text "\u{25B2}" ]
                 ]
             , div [ class "tooltip tooltip-bottom", attribute "data-tip" "Next match (Enter)" ]
                 [ button
@@ -2290,24 +2520,8 @@ viewSearchBox model =
                     , onClick SelectNextMatch
                     , disabled (not hasMatches)
                     ]
-                    [ text "▼" ]
+                    [ text "\u{25BC}" ]
                 ]
-            ]
-        , label [ class "label cursor-pointer gap-2" ]
-            [ span [ class "label-text text-sm" ] [ text "Filter" ]
-            , input
-                [ type_ "checkbox"
-                , class "toggle toggle-sm"
-                , checked model.filterActive
-                , onClick
-                    (if model.filterActive then
-                        DisableFilter
-
-                     else
-                        EnableFilter
-                    )
-                ]
-                []
             ]
         ]
 
@@ -2408,6 +2622,7 @@ viewInitEntry model index data =
                 { onToggleExpand = SetAfterExpanded
                 , searchMatches = model.searchResult.afterPathsWithMatches
                 , currentMatchPath = currentMatchPath
+                , onQuickAddFilter = Just quickAddModelFilter
                 }
                 data.model
                 viewState.afterExpandedPaths
@@ -2443,6 +2658,7 @@ viewSubscriptionEntry model data =
             { onToggleExpand = SetStartedSubscriptionsExpanded
             , searchMatches = Set.empty
             , currentMatchPath = Nothing
+            , onQuickAddFilter = Nothing
             }
 
         stoppedConfig : TreeView.UnifiedConfig Msg
@@ -2450,6 +2666,7 @@ viewSubscriptionEntry model data =
             { onToggleExpand = SetStoppedSubscriptionsExpanded
             , searchMatches = Set.empty
             , currentMatchPath = Nothing
+            , onQuickAddFilter = Nothing
             }
     in
     div [ class "bg-base-100 rounded-lg border border-base-300 p-4" ]
@@ -2482,9 +2699,6 @@ viewSubscriptionEntry model data =
 viewSingleStateMode : Model -> Int -> UpdateEntryData -> Html Msg
 viewSingleStateMode model index data =
     let
-        showFiltered =
-            model.filterActive && not (String.isEmpty (String.trim model.searchQuery))
-
         isFirstMessage =
             index == 0
 
@@ -2497,32 +2711,7 @@ viewSingleStateMode model index data =
         currentMatchPath =
             getCurrentMatchPath model
     in
-    if showFiltered then
-        let
-            visiblePaths =
-                Search.buildVisiblePaths model.searchResult.afterMatches
-
-            filterConfig =
-                { visiblePaths = visiblePaths
-                , matchingPaths = model.searchResult.afterPathsWithMatches
-                , currentMatchPath = currentMatchPath
-                , onToggleExpand = SetFilterExpanded
-                }
-        in
-        div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
-            [ div [ class "flex items-center justify-between px-4 py-2 border-b border-base-300 bg-base-200/50" ]
-                [ div [ class "flex items-center gap-2" ]
-                    [ span [ class "text-sm font-medium" ] [ text "Filtered View" ]
-                    , span [ class "badge badge-info badge-sm" ]
-                        [ text (String.fromInt model.searchResult.totalMatchCount ++ " matches") ]
-                    ]
-                , viewCollapseExpandButtons CollapseAllFilter ExpandAllFilter
-                ]
-            , div [ class "flex-1 overflow-auto p-4" ]
-                [ TreeView.viewFiltered filterConfig data.modelAfter model.filterExpandedPaths ]
-            ]
-
-    else if model.showChangedValues && not isFirstMessage then
+    if model.showChangedValues && not isFirstMessage then
         let
             treeViewChanges =
                 Dict.map (\_ change -> diffChangeToTreeViewChange change) model.changes
@@ -2534,6 +2723,7 @@ viewSingleStateMode model index data =
                 , onToggleExpand = SetDiffExpanded
                 , searchMatches = model.searchResult.afterPathsWithMatches
                 , currentMatchPath = currentMatchPath
+                , onQuickAddFilter = Just quickAddModelFilter
                 }
         in
         div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col h-full overflow-hidden" ]
@@ -2566,6 +2756,7 @@ viewSingleStateMode model index data =
                     { onToggleExpand = SetAfterExpanded
                     , searchMatches = model.searchResult.afterPathsWithMatches
                     , currentMatchPath = currentMatchPath
+                    , onQuickAddFilter = Just quickAddModelFilter
                     }
                     data.modelAfter
                     viewState.afterExpandedPaths
@@ -2584,9 +2775,6 @@ viewSplitMode model index data isFirstMessage =
         showDiffHighlighting =
             model.showChangedValues && not isFirstMessage
 
-        showFiltered =
-            model.filterActive && not (String.isEmpty (String.trim model.searchQuery))
-
         viewState =
             getMessageViewState model
 
@@ -2603,6 +2791,7 @@ viewSplitMode model index data isFirstMessage =
             , onToggleExpand = SetDiffExpanded
             , searchMatches = model.searchResult.afterPathsWithMatches
             , currentMatchPath = currentMatchPath
+            , onQuickAddFilter = Just quickAddModelFilter
             }
 
         beforeDiffConfig =
@@ -2611,41 +2800,21 @@ viewSplitMode model index data isFirstMessage =
             , onToggleExpand = SetBeforeExpanded
             , searchMatches = model.searchResult.beforePathsWithMatches
             , currentMatchPath = currentMatchPath
+            , onQuickAddFilter = Just quickAddModelFilter
             }
-
-        visiblePathsAfter =
-            Search.buildVisiblePaths model.searchResult.afterMatches
-
-        filterConfigAfter =
-            { visiblePaths = visiblePathsAfter
-            , matchingPaths = model.searchResult.afterPathsWithMatches
-            , currentMatchPath = currentMatchPath
-            , onToggleExpand = SetFilterExpanded
-            }
-
-        visiblePathsBefore =
-            Search.buildVisiblePaths model.searchResult.beforeMatches
-
-        filterConfigBefore =
-            { visiblePaths = visiblePathsBefore
-            , matchingPaths = model.searchResult.beforePathsWithMatches
-            , currentMatchPath = currentMatchPath
-            , onToggleExpand = SetFilterExpanded
-            }
-
-        matchCount =
-            model.searchResult.totalMatchCount
 
         unifiedConfigBefore =
             { onToggleExpand = SetBeforeExpanded
             , searchMatches = model.searchResult.beforePathsWithMatches
             , currentMatchPath = currentMatchPath
+            , onQuickAddFilter = Just quickAddModelFilter
             }
 
         unifiedConfigAfter =
             { onToggleExpand = SetAfterExpanded
             , searchMatches = model.searchResult.afterPathsWithMatches
             , currentMatchPath = currentMatchPath
+            , onQuickAddFilter = Just quickAddModelFilter
             }
     in
     div [ class "flex flex-col h-full gap-4" ]
@@ -2654,26 +2823,11 @@ viewSplitMode model index data isFirstMessage =
               div [ class "bg-base-100 rounded-lg border border-base-300 flex flex-col overflow-hidden" ]
                 [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
                     [ h3 [ class "font-semibold text-base" ] [ text "Model Before Message" ]
-                    , div [ class "flex items-center gap-2" ]
-                        [ if showFiltered then
-                            span [ class "badge badge-info badge-sm" ]
-                                [ text (String.fromInt matchCount ++ " matches") ]
-
-                          else
-                            text ""
-                        , if showFiltered then
-                            viewCollapseExpandButtons CollapseAllFilter ExpandAllFilter
-
-                          else
-                            viewCollapseExpandButtons CollapseAllBefore ExpandAllBefore
-                        ]
+                    , viewCollapseExpandButtons CollapseAllBefore ExpandAllBefore
                     ]
                 , div [ class "flex-1 overflow-auto p-4" ]
                     [ if isFirstMessage then
                         viewInitialStateMessage
-
-                      else if showFiltered then
-                        TreeView.viewFiltered filterConfigBefore data.modelBefore model.filterExpandedPaths
 
                       else if showDiffHighlighting then
                         TreeView.viewDiffBefore beforeDiffConfig data.modelBefore viewState.beforeExpandedPaths
@@ -2688,11 +2842,7 @@ viewSplitMode model index data isFirstMessage =
                 [ div [ class "flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50" ]
                     [ h3 [ class "font-semibold text-base" ] [ text "Model After Message" ]
                     , div [ class "flex items-center gap-2" ]
-                        [ if showFiltered then
-                            span [ class "badge badge-info badge-sm" ]
-                                [ text (String.fromInt matchCount ++ " matches") ]
-
-                          else if showDiffHighlighting && changeCount > 0 then
+                        [ if showDiffHighlighting && changeCount > 0 then
                             span [ class "badge badge-warning badge-sm" ]
                                 [ text (String.fromInt changeCount ++ " changes") ]
 
@@ -2702,18 +2852,11 @@ viewSplitMode model index data isFirstMessage =
 
                           else
                             text ""
-                        , if showFiltered then
-                            viewCollapseExpandButtons CollapseAllFilter ExpandAllFilter
-
-                          else
-                            viewCollapseExpandButtons CollapseAllAfter ExpandAllAfter
+                        , viewCollapseExpandButtons CollapseAllAfter ExpandAllAfter
                         ]
                     ]
                 , div [ class "flex-1 overflow-auto p-4" ]
-                    [ if showFiltered then
-                        TreeView.viewFiltered filterConfigAfter data.modelAfter model.filterExpandedPaths
-
-                      else if showDiffHighlighting then
+                    [ if showDiffHighlighting then
                         TreeView.viewDiff diffConfig data.modelAfter viewState.afterExpandedPaths
 
                       else
@@ -2721,7 +2864,7 @@ viewSplitMode model index data isFirstMessage =
                     ]
                 ]
             ]
-        , if showDiffHighlighting && not showFiltered then
+        , if showDiffHighlighting then
             viewDiffLegend
 
           else
@@ -2748,16 +2891,50 @@ viewCollapseExpandButtons collapseMsg expandMsg =
                 [ class "btn btn-ghost btn-sm px-2 text-lg"
                 , onClick collapseMsg
                 ]
-                [ text "⊟" ]
+                [ text "\u{229F}" ]
             ]
         , div [ class "tooltip tooltip-bottom", attribute "data-tip" "Expand all" ]
             [ button
                 [ class "btn btn-ghost btn-sm px-2 text-lg"
                 , onClick expandMsg
                 ]
-                [ text "⊞" ]
+                [ text "\u{229E}" ]
             ]
         ]
+
+
+{-| Render a small quick-add filter icon.
+-}
+viewQuickAddIcon : Msg -> String -> Html Msg
+viewQuickAddIcon msg tooltip =
+    div [ class "tooltip tooltip-bottom", attribute "data-tip" tooltip ]
+        [ button
+            [ class "btn btn-ghost btn-xs px-0.5 text-base-content/30 hover:text-primary"
+            , onClick msg
+            ]
+            [ i [ class "fa-solid fa-filter text-xs" ] [] ]
+        ]
+
+
+{-| Quick-add callback for model tree view fields.
+-}
+quickAddModelFilter : List String -> String -> Msg
+quickAddModelFilter path value =
+    QuickAddFilter (ModelValueFilter { key = String.join "." path, value = value })
+
+
+{-| Quick-add callback for message payload tree view fields.
+-}
+quickAddMessageFieldFilter : List String -> String -> Msg
+quickAddMessageFieldFilter path value =
+    QuickAddFilter (MessageFieldFilter { key = String.join "." path, value = value })
+
+
+{-| Quick-add callback for effect field tree view.
+-}
+quickAddEffectFieldFilter : List String -> String -> Msg
+quickAddEffectFieldFilter path value =
+    QuickAddFilter (EffectFieldFilter { key = String.join "." path, value = value })
 
 
 viewDiffLegend : Html Msg
@@ -2830,6 +3007,7 @@ viewMessageDetails model data =
             { onToggleExpand = SetPayloadExpanded
             , searchMatches = model.searchResult.payloadPathsWithMatches
             , currentMatchPath = currentMatchPath
+            , onQuickAddFilter = Just quickAddMessageFieldFilter
             }
 
         messageNameHighlight =
@@ -2849,6 +3027,7 @@ viewMessageDetails model data =
                         , class ("font-mono font-medium" ++ messageNameHighlight)
                         ]
                         [ text data.message.name ]
+                    , viewQuickAddIcon (QuickAddFilter (MessageNameFilter { query = data.message.name })) "Filter by this message name"
                     ]
                 , viewCollapseExpandButtons CollapseAllPayload ExpandAllPayload
                 ]
@@ -2928,6 +3107,7 @@ viewEffectItem model effectExpandedPaths index effect =
             { onToggleExpand = SetEffectExpanded index
             , searchMatches = effectDataMatches
             , currentMatchPath = currentMatchPath
+            , onQuickAddFilter = Just quickAddEffectFieldFilter
             }
 
         effectNameMatches =
@@ -2950,6 +3130,7 @@ viewEffectItem model effectExpandedPaths index effect =
                     , class ("font-mono font-medium text-sm" ++ effectNameHighlight)
                     ]
                     [ text effect.name ]
+                , viewQuickAddIcon (QuickAddFilter (EffectNameFilter { query = effect.name })) "Filter by this effect name"
                 ]
             , viewCollapseExpandButtons (CollapseAllEffect index) (ExpandAllEffect index)
             ]

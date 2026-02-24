@@ -4,6 +4,9 @@ module Diff exposing
     , Change(..)
     , DiffResult
     , pathToString
+    , DiffOperation(..)
+    , diffOperationDecoder
+    , applyPatch
     )
 
 {-| State comparison and change detection for the TeaForge Debugger.
@@ -12,15 +15,25 @@ This module provides algorithms to compare two JSON state trees and identify
 which paths have changed between them. This is used for the diff view to
 highlight modified values and optionally filter to show only changes.
 
+It also provides JSON Patch (RFC 6902) application support for the v2 log
+format, which stores model changes as a list of patch operations rather than
+full state snapshots.
+
 ## Comparison
 
     compareStates : D.Value -> D.Value -> List TreePath
     findChangedPaths : D.Value -> D.Value -> DiffResult
 
+## Patch Application
+
+    applyPatch : D.Value -> List DiffOperation -> D.Value
+    diffOperationDecoder : D.Decoder DiffOperation
+
 ## Types
 
     Change : The type of change at a path
     DiffResult : Complete diff result with all changes
+    DiffOperation : A single JSON Patch operation
 
 ## Utilities
 
@@ -546,3 +559,344 @@ countChangeType changeType changes =
     Dict.values changes
         |> List.filter (\c -> c == changeType)
         |> List.length
+
+
+
+-- JSON PATCH APPLICATION
+
+
+{-| A single JSON Patch operation (RFC 6902).
+
+  - `AddOp path value`: set the value at the given JSON Pointer path
+  - `ReplaceOp path value`: replace the value at the given JSON Pointer path
+  - `RemoveOp path`: remove the value at the given JSON Pointer path
+
+-}
+type DiffOperation
+    = AddOp String D.Value
+    | ReplaceOp String D.Value
+    | RemoveOp String
+
+
+{-| Decoder for a single JSON Patch operation.
+
+Reads the `op` field to determine the operation type, then decodes `path`
+and optionally `value`.
+
+-}
+diffOperationDecoder : D.Decoder DiffOperation
+diffOperationDecoder =
+    D.field "op" D.string
+        |> D.andThen
+            (\op ->
+                case op of
+                    "add" ->
+                        D.map2 AddOp
+                            (D.field "path" D.string)
+                            (D.field "value" D.value)
+
+                    "replace" ->
+                        D.map2 ReplaceOp
+                            (D.field "path" D.string)
+                            (D.field "value" D.value)
+
+                    "remove" ->
+                        D.map RemoveOp
+                            (D.field "path" D.string)
+
+                    other ->
+                        D.fail ("Unknown JSON Patch op: " ++ other)
+            )
+
+
+{-| Apply a list of JSON Patch operations to a base value.
+
+Folds over the operations, applying each one in sequence. The result is the
+accumulated value after all operations have been applied.
+
+-}
+applyPatch : D.Value -> List DiffOperation -> D.Value
+applyPatch base ops =
+    List.foldl applyOp base ops
+
+
+{-| Apply a single patch operation to a value.
+-}
+applyOp : DiffOperation -> D.Value -> D.Value
+applyOp op base =
+    case op of
+        AddOp path value ->
+            setAtPath (parsePointer path) value base
+
+        ReplaceOp path value ->
+            setAtPath (parsePointer path) value base
+
+        RemoveOp path ->
+            removeAtPath (parsePointer path) base
+
+
+{-| Parse a JSON Pointer (RFC 6901) string into a list of path segments.
+
+Handles `~1` → `/` and `~0` → `~` unescaping. A leading `/` is consumed
+as the pointer delimiter.
+
+Per RFC 6901, a valid pointer is either the empty string `""` (root, maps to
+`[]`) or a string beginning with `/`. A non-empty string that does not start
+with `/` is not a valid RFC 6901 pointer; such inputs are treated as root
+(returning `[]`) and will be silently mishandled — callers should ensure
+only well-formed pointers are passed.
+
+    parsePointer "/foo/bar" == ["foo", "bar"]
+    parsePointer "/a~1b" == ["a/b"]
+    parsePointer "" == []
+
+-}
+parsePointer : String -> List String
+parsePointer pointer =
+    case String.uncons pointer of
+        Just ( '/', rest ) ->
+            if String.isEmpty rest then
+                [ "" ]
+
+            else
+                String.split "/" rest
+                    |> List.map unescapePointerSegment
+
+        _ ->
+            -- RFC 6901: only the empty string is a valid non-/-prefixed pointer.
+            -- Non-empty strings without a leading '/' are invalid; treat as root.
+            []
+
+
+{-| Unescape a single JSON Pointer segment.
+
+Per RFC 6901: `~1` → `/`, `~0` → `~` (in that order).
+
+-}
+unescapePointerSegment : String -> String
+unescapePointerSegment segment =
+    segment
+        |> String.replace "~1" "/"
+        |> String.replace "~0" "~"
+
+
+{-| Recursively navigate into a JSON value and set a new value at the leaf path.
+
+For objects, reconstructs the object with the updated field.
+For arrays, reconstructs the array with the updated element.
+At the root (empty path), returns the new value directly.
+
+-}
+setAtPath : List String -> D.Value -> D.Value -> D.Value
+setAtPath segments newValue current =
+    case segments of
+        [] ->
+            newValue
+
+        [ key ] ->
+            case D.decodeValue (D.keyValuePairs D.value) current of
+                Ok pairs ->
+                    -- Object: update or insert the key
+                    let
+                        exists =
+                            List.any (\( k, _ ) -> k == key) pairs
+
+                        updatedPairs =
+                            if exists then
+                                List.map
+                                    (\( k, v ) ->
+                                        if k == key then
+                                            ( k, newValue )
+
+                                        else
+                                            ( k, v )
+                                    )
+                                    pairs
+
+                            else
+                                pairs ++ [ ( key, newValue ) ]
+                    in
+                    E.object updatedPairs
+
+                Err _ ->
+                    case D.decodeValue (D.list D.value) current of
+                        Ok items ->
+                            -- Array: update element at index, or append for RFC 6902 '-' index
+                            case String.toInt key of
+                                Just idx ->
+                                    let
+                                        updatedItems =
+                                            List.indexedMap
+                                                (\i v ->
+                                                    if i == idx then
+                                                        newValue
+
+                                                    else
+                                                        v
+                                                )
+                                                items
+                                    in
+                                    E.list identity updatedItems
+
+                                Nothing ->
+                                    if key == "-" then
+                                        -- RFC 6902: '-' means append to end of array
+                                        E.list identity (items ++ [ newValue ])
+
+                                    else
+                                        current
+
+                        Err _ ->
+                            current
+
+        key :: rest ->
+            case D.decodeValue (D.keyValuePairs D.value) current of
+                Ok pairs ->
+                    let
+                        childValue =
+                            pairs
+                                |> List.filter (\( k, _ ) -> k == key)
+                                |> List.head
+                                |> Maybe.map Tuple.second
+                                |> Maybe.withDefault E.null
+
+                        updatedChild =
+                            setAtPath rest newValue childValue
+
+                        exists =
+                            List.any (\( k, _ ) -> k == key) pairs
+
+                        updatedPairs =
+                            if exists then
+                                List.map
+                                    (\( k, v ) ->
+                                        if k == key then
+                                            ( k, updatedChild )
+
+                                        else
+                                            ( k, v )
+                                    )
+                                    pairs
+
+                            else
+                                pairs ++ [ ( key, updatedChild ) ]
+                    in
+                    E.object updatedPairs
+
+                Err _ ->
+                    case D.decodeValue (D.list D.value) current of
+                        Ok items ->
+                            case String.toInt key of
+                                Just idx ->
+                                    let
+                                        childValue =
+                                            List.head (List.drop idx items)
+                                                |> Maybe.withDefault E.null
+
+                                        updatedChild =
+                                            setAtPath rest newValue childValue
+
+                                        updatedItems =
+                                            List.indexedMap
+                                                (\i v ->
+                                                    if i == idx then
+                                                        updatedChild
+
+                                                    else
+                                                        v
+                                                )
+                                                items
+                                    in
+                                    E.list identity updatedItems
+
+                                Nothing ->
+                                    if key == "-" then
+                                        -- RFC 6902: '-' means append to end of array;
+                                        -- navigate into E.null as the new child context
+                                        E.list identity (items ++ [ setAtPath rest newValue E.null ])
+
+                                    else
+                                        current
+
+                        Err _ ->
+                            current
+
+
+{-| Recursively navigate into a JSON value and remove the value at the leaf path.
+
+For objects, reconstructs the object without the target key.
+For arrays, reconstructs the array without the target element.
+
+-}
+removeAtPath : List String -> D.Value -> D.Value
+removeAtPath segments current =
+    case segments of
+        [] ->
+            -- RFC 6902 does not define removal of the root document; treat as no-op.
+            current
+
+        [ key ] ->
+            case D.decodeValue (D.keyValuePairs D.value) current of
+                Ok pairs ->
+                    -- Object: remove the key
+                    E.object (List.filter (\( k, _ ) -> k /= key) pairs)
+
+                Err _ ->
+                    case D.decodeValue (D.list D.value) current of
+                        Ok items ->
+                            -- Array: remove element at index
+                            case String.toInt key of
+                                Just idx ->
+                                    E.list identity
+                                        (List.indexedMap (\i v -> ( i, v )) items
+                                            |> List.filter (\( i, _ ) -> i /= idx)
+                                            |> List.map Tuple.second
+                                        )
+
+                                Nothing ->
+                                    current
+
+                        Err _ ->
+                            current
+
+        key :: rest ->
+            case D.decodeValue (D.keyValuePairs D.value) current of
+                Ok pairs ->
+                    let
+                        updatedPairs =
+                            List.map
+                                (\( k, v ) ->
+                                    if k == key then
+                                        ( k, removeAtPath rest v )
+
+                                    else
+                                        ( k, v )
+                                )
+                                pairs
+                    in
+                    E.object updatedPairs
+
+                Err _ ->
+                    case D.decodeValue (D.list D.value) current of
+                        Ok items ->
+                            case String.toInt key of
+                                Just idx ->
+                                    let
+                                        updatedItems =
+                                            List.indexedMap
+                                                (\i v ->
+                                                    if i == idx then
+                                                        removeAtPath rest v
+
+                                                    else
+                                                        v
+                                                )
+                                                items
+                                    in
+                                    E.list identity updatedItems
+
+                                Nothing ->
+                                    current
+
+                        Err _ ->
+                            current

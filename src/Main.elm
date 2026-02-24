@@ -1425,15 +1425,18 @@ processValidEntry lineNum rawValue model =
             case D.decodeValue (LogParser.initDataDecoder model.compression) rawValue of
                 Ok initData ->
                     let
+                        appliedModel =
+                            Diff.applyPatch (E.object []) initData.modelDiff
+
                         entry =
                             InitEntry
                                 { timestamp = initData.timestamp
-                                , model = initData.model
+                                , model = appliedModel
                                 , effects = initData.effects
                                 }
                     in
                     addEntryAndMaybeSelect entry
-                        { model | lastModelAfter = initData.model }
+                        { model | lastModelAfter = appliedModel }
 
                 Err e ->
                     addErrorEntry lineNum (D.errorToString e) model
@@ -1442,17 +1445,20 @@ processValidEntry lineNum rawValue model =
             case D.decodeValue (LogParser.updateDataDecoder model.compression) rawValue of
                 Ok updateData ->
                     let
+                        appliedModel =
+                            Diff.applyPatch model.lastModelAfter updateData.modelDiff
+
                         entry =
                             UpdateEntry
                                 { timestamp = updateData.timestamp
                                 , message = updateData.message
                                 , modelBefore = model.lastModelAfter
-                                , modelAfter = updateData.model
+                                , modelAfter = appliedModel
                                 , effects = updateData.effects
                                 }
                     in
                     addEntryAndMaybeSelect entry
-                        { model | lastModelAfter = updateData.model }
+                        { model | lastModelAfter = appliedModel }
 
                 Err e ->
                     addErrorEntry lineNum (D.errorToString e) model

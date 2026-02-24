@@ -6,11 +6,10 @@ Tests cover:
 
   - Entry type detection
   - Header decoding (with and without compression)
-  - Init entry decoding
-  - Update entry decoding
+  - Init entry decoding (v2 format with modelDiff)
+  - Update entry decoding (v2 format with modelDiff)
   - Subscription change entry decoding
-  - Message data decoding (various formats)
-  - Effect decoding (various formats)
+  - Effect decoding (v2 formats)
 
 -}
 
@@ -31,7 +30,6 @@ suite =
         , initDataDecoderTests
         , updateDataDecoderTests
         , subscriptionChangeDataDecoderTests
-        , messageDataDecoderTests
         , effectDecoderTests
         ]
 
@@ -145,7 +143,7 @@ initDataDecoderTests =
                         E.object
                             [ ( "type", E.string "init" )
                             , ( "timestamp", E.int 12345 )
-                            , ( "model", E.object [ ( "counter", E.int 0 ) ] )
+                            , ( "modelDiff", E.list identity [] )
                             , ( "effects", E.list identity [] )
                             ]
                 in
@@ -161,7 +159,7 @@ initDataDecoderTests =
                     json =
                         E.object
                             [ ( "type", E.string "init" )
-                            , ( "model", E.object [] )
+                            , ( "modelDiff", E.list identity [] )
                             ]
                 in
                 case D.decodeValue (LogParser.initDataDecoder CompressionDict.empty) json of
@@ -176,12 +174,35 @@ initDataDecoderTests =
                     json =
                         E.object
                             [ ( "type", E.string "init" )
-                            , ( "model", E.object [] )
+                            , ( "modelDiff", E.list identity [] )
                             ]
                 in
                 case D.decodeValue (LogParser.initDataDecoder CompressionDict.empty) json of
                     Ok data ->
                         Expect.equal [] data.effects
+
+                    Err e ->
+                        Expect.fail (D.errorToString e)
+        , test "parses modelDiff list" <|
+            \_ ->
+                let
+                    json =
+                        E.object
+                            [ ( "type", E.string "init" )
+                            , ( "modelDiff"
+                              , E.list identity
+                                    [ E.object
+                                        [ ( "op", E.string "add" )
+                                        , ( "path", E.string "/counter" )
+                                        , ( "value", E.int 0 )
+                                        ]
+                                    ]
+                              )
+                            ]
+                in
+                case D.decodeValue (LogParser.initDataDecoder CompressionDict.empty) json of
+                    Ok data ->
+                        Expect.equal 1 (List.length data.modelDiff)
 
                     Err e ->
                         Expect.fail (D.errorToString e)
@@ -191,12 +212,11 @@ initDataDecoderTests =
                     json =
                         E.object
                             [ ( "type", E.string "init" )
-                            , ( "model", E.object [] )
+                            , ( "modelDiff", E.list identity [] )
                             , ( "effects"
                               , E.list identity
                                     [ E.object
-                                        [ ( "name", E.string "Http" )
-                                        , ( "data", E.object [ ( "url", E.string "test" ) ] )
+                                        [ ( "_type", E.string "Http" )
                                         ]
                                     ]
                               )
@@ -222,12 +242,9 @@ updateDataDecoderTests =
                             [ ( "type", E.string "update" )
                             , ( "timestamp", E.int 12345 )
                             , ( "message"
-                              , E.object
-                                    [ ( "name", E.string "ButtonClicked" )
-                                    , ( "payload", E.null )
-                                    ]
+                              , E.object [ ( "_type", E.string "ButtonClicked" ) ]
                               )
-                            , ( "model", E.object [ ( "counter", E.int 1 ) ] )
+                            , ( "modelDiff", E.list identity [] )
                             , ( "effects", E.list identity [] )
                             ]
                 in
@@ -241,7 +258,7 @@ updateDataDecoderTests =
 
                     Err e ->
                         Expect.fail (D.errorToString e)
-        , test "decodes message with _type field (new format)" <|
+        , test "decodes message with _type field" <|
             \_ ->
                 let
                     json =
@@ -250,33 +267,12 @@ updateDataDecoderTests =
                             , ( "message"
                               , E.object [ ( "_type", E.string "Increment" ) ]
                               )
-                            , ( "model", E.object [] )
+                            , ( "modelDiff", E.list identity [] )
                             ]
                 in
                 case D.decodeValue (LogParser.updateDataDecoder CompressionDict.empty) json of
                     Ok data ->
                         Expect.equal "Increment" data.message.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "decodes message with type field instead of name" <|
-            \_ ->
-                let
-                    json =
-                        E.object
-                            [ ( "type", E.string "update" )
-                            , ( "message"
-                              , E.object
-                                    [ ( "type", E.string "UserAction" )
-                                    , ( "payload", E.null )
-                                    ]
-                              )
-                            , ( "model", E.object [] )
-                            ]
-                in
-                case D.decodeValue (LogParser.updateDataDecoder CompressionDict.empty) json of
-                    Ok data ->
-                        Expect.equal "UserAction" data.message.name
 
                     Err e ->
                         Expect.fail (D.errorToString e)
@@ -294,7 +290,7 @@ updateDataDecoderTests =
                                       )
                                     ]
                               )
-                            , ( "model", E.object [] )
+                            , ( "modelDiff", E.list identity [] )
                             ]
                 in
                 case D.decodeValue (LogParser.updateDataDecoder CompressionDict.empty) json of
@@ -309,8 +305,8 @@ updateDataDecoderTests =
                     json =
                         E.object
                             [ ( "type", E.string "update" )
-                            , ( "message", E.object [ ( "name", E.string "Test" ) ] )
-                            , ( "model", E.object [] )
+                            , ( "message", E.object [ ( "_type", E.string "Test" ) ] )
+                            , ( "modelDiff", E.list identity [] )
                             ]
                 in
                 case D.decodeValue (LogParser.updateDataDecoder CompressionDict.empty) json of
@@ -325,8 +321,8 @@ updateDataDecoderTests =
                     json =
                         E.object
                             [ ( "type", E.string "update" )
-                            , ( "message", E.object [ ( "name", E.string "Test" ) ] )
-                            , ( "model", E.object [] )
+                            , ( "message", E.object [ ( "_type", E.string "Test" ) ] )
+                            , ( "modelDiff", E.list identity [] )
                             ]
                 in
                 case D.decodeValue (LogParser.updateDataDecoder CompressionDict.empty) json of
@@ -385,143 +381,10 @@ subscriptionChangeDataDecoderTests =
         ]
 
 
-messageDataDecoderTests : Test
-messageDataDecoderTests =
-    describe "messageDataDecoder"
-        [ test "decodes message with name and payload" <|
-            \_ ->
-                let
-                    json =
-                        E.object
-                            [ ( "name", E.string "ButtonClicked" )
-                            , ( "payload", E.object [ ( "buttonId", E.string "submit" ) ] )
-                            ]
-                in
-                case D.decodeValue LogParser.messageDataDecoder json of
-                    Ok msg ->
-                        Expect.equal "ButtonClicked" msg.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "decodes message with name and data field" <|
-            \_ ->
-                let
-                    json =
-                        E.object
-                            [ ( "name", E.string "FormSubmit" )
-                            , ( "data", E.object [ ( "form", E.string "login" ) ] )
-                            ]
-                in
-                case D.decodeValue LogParser.messageDataDecoder json of
-                    Ok msg ->
-                        Expect.equal "FormSubmit" msg.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "decodes message with type field instead of name" <|
-            \_ ->
-                let
-                    json =
-                        E.object
-                            [ ( "type", E.string "Navigate" )
-                            , ( "payload", E.string "/home" )
-                            ]
-                in
-                case D.decodeValue LogParser.messageDataDecoder json of
-                    Ok msg ->
-                        Expect.equal "Navigate" msg.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "decodes message with _type field" <|
-            \_ ->
-                let
-                    json =
-                        E.object
-                            [ ( "_type", E.string "Increment" )
-                            , ( "amount", E.int 5 )
-                            ]
-                in
-                case D.decodeValue LogParser.messageDataDecoder json of
-                    Ok msg ->
-                        Expect.equal "Increment" msg.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "defaults payload to null if missing" <|
-            \_ ->
-                let
-                    json =
-                        E.object [ ( "name", E.string "NoPayload" ) ]
-                in
-                case D.decodeValue LogParser.messageDataDecoder json of
-                    Ok msg ->
-                        Expect.all
-                            [ \_ -> Expect.equal "NoPayload" msg.name
-                            , \_ ->
-                                case D.decodeValue (D.null ()) msg.payload of
-                                    Ok _ ->
-                                        Expect.pass
-
-                                    Err _ ->
-                                        Expect.fail "Expected null payload"
-                            ]
-                            ()
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        ]
-
-
 effectDecoderTests : Test
 effectDecoderTests =
     describe "effectDecoder"
-        [ test "decodes effect with name and data" <|
-            \_ ->
-                let
-                    json =
-                        E.object
-                            [ ( "name", E.string "Http" )
-                            , ( "data", E.object [ ( "url", E.string "https://api.example.com" ) ] )
-                            ]
-                in
-                case D.decodeValue LogParser.effectDecoder json of
-                    Ok effect ->
-                        Expect.equal "Http" effect.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "decodes effect with name and payload" <|
-            \_ ->
-                let
-                    json =
-                        E.object
-                            [ ( "name", E.string "Navigation" )
-                            , ( "payload", E.string "/dashboard" )
-                            ]
-                in
-                case D.decodeValue LogParser.effectDecoder json of
-                    Ok effect ->
-                        Expect.equal "Navigation" effect.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "decodes effect with type field" <|
-            \_ ->
-                let
-                    json =
-                        E.object
-                            [ ( "type", E.string "Random" )
-                            , ( "data", E.int 42 )
-                            ]
-                in
-                case D.decodeValue LogParser.effectDecoder json of
-                    Ok effect ->
-                        Expect.equal "Random" effect.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "decodes effect with _type field (new format)" <|
+        [ test "decodes effect with _type field" <|
             \_ ->
                 let
                     json =
@@ -546,28 +409,6 @@ effectDecoderTests =
                 case D.decodeValue LogParser.effectDecoder json of
                     Ok effect ->
                         Expect.equal "Cmd.none" effect.name
-
-                    Err e ->
-                        Expect.fail (D.errorToString e)
-        , test "defaults data to null if missing" <|
-            \_ ->
-                let
-                    json =
-                        E.object [ ( "name", E.string "NoData" ) ]
-                in
-                case D.decodeValue LogParser.effectDecoder json of
-                    Ok effect ->
-                        Expect.all
-                            [ \_ -> Expect.equal "NoData" effect.name
-                            , \_ ->
-                                case D.decodeValue (D.null ()) effect.data of
-                                    Ok _ ->
-                                        Expect.pass
-
-                                    Err _ ->
-                                        Expect.fail "Expected null data"
-                            ]
-                            ()
 
                     Err e ->
                         Expect.fail (D.errorToString e)

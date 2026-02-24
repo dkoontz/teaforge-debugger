@@ -3,7 +3,6 @@ module LogParser exposing
     , initDataDecoder
     , updateDataDecoder
     , subscriptionChangeDataDecoder
-    , messageDataDecoder
     , effectDecoder
     , headerDecoder
     , HeaderData
@@ -26,12 +25,12 @@ from a streaming input source. Each entry is decoded based on its "type" field.
 
 ## Component Decoders
 
-    messageDataDecoder : D.Decoder MessageData
     effectDecoder : D.Decoder Effect
 
 -}
 
 import CompressionDict exposing (Compression)
+import Diff
 import Json.Decode as D
 import Json.Encode as E
 import Types exposing (Effect, MessageData)
@@ -41,7 +40,7 @@ import Types exposing (Effect, MessageData)
 -}
 type alias InitData =
     { timestamp : Int
-    , model : D.Value
+    , modelDiff : List Diff.DiffOperation
     , effects : List Effect
     }
 
@@ -51,7 +50,7 @@ type alias InitData =
 type alias UpdateData =
     { timestamp : Int
     , message : MessageData
-    , model : D.Value
+    , modelDiff : List Diff.DiffOperation
     , effects : List Effect
     }
 
@@ -123,14 +122,14 @@ initDataDecoder compression =
 initDataDecoderInternal : D.Decoder InitData
 initDataDecoderInternal =
     D.map3
-        (\ts model effs ->
+        (\ts modelDiff effs ->
             { timestamp = ts
-            , model = model
+            , modelDiff = modelDiff
             , effects = effs
             }
         )
         (D.oneOf [ D.field "timestamp" D.int, D.succeed 0 ])
-        (D.field "model" D.value)
+        (D.field "modelDiff" (D.list Diff.diffOperationDecoder))
         (D.oneOf [ D.field "effects" (D.list effectDecoder), D.succeed [] ])
 
 
@@ -163,16 +162,16 @@ updateDataDecoder compression =
 updateDataDecoderInternal : D.Decoder UpdateData
 updateDataDecoderInternal =
     D.map4
-        (\ts msg model effs ->
+        (\ts msg modelDiff effs ->
             { timestamp = ts
             , message = msg
-            , model = model
+            , modelDiff = modelDiff
             , effects = effs
             }
         )
         (D.oneOf [ D.field "timestamp" D.int, D.succeed 0 ])
         (D.field "message" newMessageDataDecoder)
-        (D.field "model" D.value)
+        (D.field "modelDiff" (D.list Diff.diffOperationDecoder))
         (D.oneOf [ D.field "effects" (D.list effectDecoder), D.succeed [] ])
 
 
@@ -216,36 +215,28 @@ subscriptionChangeDataDecoderInternal =
         (D.oneOf [ D.field "stopped" (D.list D.value), D.succeed [] ])
 
 
-{-| Decoder for message data in new format.
+{-| Decoder for message data in v2 format.
 
-The new format uses `_type` for the message type name.
-If there's an `_unwrapped` or `_inner` field, that contains the inner message.
+The v2 format uses `_type` for the message type name.
+If there's an `_inner` field, that contains the inner message.
 
 Note: Decompression happens at the entry level before this decoder runs.
 
 -}
 newMessageDataDecoder : D.Decoder MessageData
 newMessageDataDecoder =
-    D.oneOf
-        [ -- New format with _type and possibly _unwrapped/_inner
-          D.andThen
-            (\typeStr ->
-                D.oneOf
-                    [ -- Has _unwrapped - use the unwrapped message type
-                      D.field "_unwrapped" D.value
-                        |> D.andThen (decodeInnerMessage typeStr)
-                    , -- Has _inner - use the inner message type
-                      D.field "_inner" D.value
-                        |> D.andThen (decodeInnerMessage typeStr)
-                    , -- No _unwrapped/_inner - use the whole message as payload
-                      D.value
-                        |> D.map (\v -> { name = typeStr, payload = v })
-                    ]
-            )
-            (D.field "_type" D.string)
-        , -- Legacy format fallback
-          messageDataDecoder
-        ]
+    D.andThen
+        (\typeStr ->
+            D.oneOf
+                [ -- Has _inner - use the inner message type
+                  D.field "_inner" D.value
+                    |> D.andThen (decodeInnerMessage typeStr)
+                , -- No _inner - use the whole message as payload
+                  D.value
+                    |> D.map (\v -> { name = typeStr, payload = v })
+                ]
+        )
+        (D.field "_type" D.string)
 
 
 {-| Decode inner message, extracting its type name if available.
@@ -260,47 +251,7 @@ decodeInnerMessage fallbackType inner =
             D.succeed { name = fallbackType, payload = inner }
 
 
-{-| Decoder for message data (legacy format).
-
-Expected format:
-
-    {
-        "name": "ButtonClicked",
-        "payload": { "buttonId": "submit" }
-    }
-
--}
-messageDataDecoder : D.Decoder MessageData
-messageDataDecoder =
-    D.oneOf
-        [ -- Standard format: name + payload
-          D.map2 MessageData
-            (D.field "name" D.string)
-            (D.oneOf
-                [ D.field "payload" D.value
-                , D.field "data" D.value
-                , D.succeed nullValue
-                ]
-            )
-        , -- Alternative: type field instead of name
-          D.map2 MessageData
-            (D.field "type" D.string)
-            (D.oneOf
-                [ D.field "payload" D.value
-                , D.field "data" D.value
-                , D.succeed nullValue
-                ]
-            )
-        , -- New format: _type field
-          D.map2 MessageData
-            (D.field "_type" D.string)
-            D.value
-        ]
-
-
 {-| Decoder for an effect (command).
-
-Handles both new and legacy formats.
 
 Note: Decompression happens at the entry level before this decoder runs.
 
@@ -308,32 +259,14 @@ Note: Decompression happens at the entry level before this decoder runs.
 effectDecoder : D.Decoder Effect
 effectDecoder =
     D.oneOf
-        [ -- New format: _type field identifies the effect type
+        [ -- v2 format: _type field identifies the effect type
           D.field "_type" D.string
             |> D.andThen
                 (\typeStr ->
                     D.value
                         |> D.map (\v -> { name = typeStr, data = v })
                 )
-        , -- Legacy format: name + data
-          D.map2 Effect
-            (D.field "name" D.string)
-            (D.oneOf
-                [ D.field "data" D.value
-                , D.field "payload" D.value
-                , D.succeed nullValue
-                ]
-            )
-        , -- Legacy: type + payload/data
-          D.map2 Effect
-            (D.field "type" D.string)
-            (D.oneOf
-                [ D.field "data" D.value
-                , D.field "payload" D.value
-                , D.succeed nullValue
-                ]
-            )
-        , -- Just a string command name
+        , -- String-only effect name
           D.string
             |> D.map (\name -> { name = name, data = nullValue })
         ]

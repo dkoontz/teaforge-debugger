@@ -1,7 +1,7 @@
 {
   "name": "teaforge-debugger",
   "productName": "TeaForge Debugger",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "A debugging utility for TeaForge-based applications. Reads and parses TeaForge log files to visualize state changes, messages, and effects.",
   "main": "main.js",
   "scripts": {

@@ -37,7 +37,12 @@ shift
 case "$COMMAND" in
     screenshot)
         PATH_ARG="${1:-/tmp/screenshot.png}"
-        exec node "$BROWSER_TOOLS" screenshot "{\"wsUrl\": \"$WS_URL\", \"path\": \"$PATH_ARG\"}"
+        node "$BROWSER_TOOLS" screenshot "{\"wsUrl\": \"$WS_URL\", \"path\": \"$PATH_ARG\"}"
+        STATUS=$?
+        if [ $STATUS -eq 0 ] && [ -f "$PATH_ARG" ]; then
+            sips -Z 1024 "$PATH_ARG" --out "$PATH_ARG" > /dev/null 2>&1
+        fi
+        exit $STATUS
         ;;
     click-on-text)
         TEXT_ARG="$1"

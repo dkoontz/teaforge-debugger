@@ -23,7 +23,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Elm
-        run: npm install -g elm
+        run: npm install -g elm@0.19.1
 
       - name: Install dependencies
         run: npm ci

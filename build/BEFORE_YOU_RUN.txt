@@ -1,0 +1,22 @@
+TeaForge Debugger -- read before running
+========================================
+
+Because this app is downloaded from the internet and is NOT notarized by
+Apple, macOS will block it on first launch with a message like:
+
+    "TeaForge Debugger" cannot be opened because Apple cannot check it
+    for malicious software.
+
+To fix this, remove the quarantine flag with command in Terminal:
+
+  1. Open Terminal:
+       Press Command + Space, type Terminal, and press Return.
+
+  2. Copy and paste this line, then press Return:
+
+       xattr -cr "/Applications/TeaForge Debugger.app"
+
+  3. Launch TeaForge Debugger
+
+You only need to do this once. The command is safe: it only clears the
+"downloaded from the internet" marker that triggers the block.

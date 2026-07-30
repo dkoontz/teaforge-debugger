@@ -37,6 +37,10 @@ dmg:
       y: 220
       type: link
       path: /Applications
+    - x: 270
+      y: 110
+      type: file
+      path: BEFORE_YOU_RUN.txt
 
 win:
   target:
